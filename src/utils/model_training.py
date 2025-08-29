@@ -1,15 +1,15 @@
 
 import os
 import torch
-import panda as pd
+import pandas as pd
 import numpy as np
-import datetime
+from datetime import datetime
 from tqdm import tqdm
 
 # ------------------------------ CLASS ------------------------------
 class ModelTrainer:
 
-    def __init__(self, model, train_loader, val_loader, optimizer, criterion, device='cpu', scheduler=None):
+    def __init__(self, model, train_loader, val_loader, optimizer, criterion, device='cpu', scheduler=None, checkpoint_path=None):
         """
         Initialize the ModelTrainer.
         Args:
@@ -30,14 +30,25 @@ class ModelTrainer:
         self.criterion = criterion
         self.device = device
         self.scheduler = scheduler
+        self.checkpoint_path = checkpoint_path
         self.train_losses = []
         self.val_losses = []
         self.train_losses_per_class = []
         self.val_losses_per_class = []
 
     
-    def train(self, num_epochs=10, eval_fn=None, threshold=0.5):
-        for epoch in range(num_epochs):
+    def train(self, num_epochs=10, eval_fn=None, threshold=0.5, start_epoch=0):
+        """
+        Train the model.
+        Args:
+            num_epochs: Number of training epochs
+            eval_fn: Optional evaluation function
+            threshold: Classification threshold
+            checkpoint_path: Path to save model checkpoints
+        Returns:
+            None
+        """
+        for epoch in range(start_epoch, num_epochs):
             train_loss, train_per_class_loss, train_preds, train_labels = self.training_loop(threshold)
             val_loss, val_per_class_loss, val_preds, val_labels = self.validation_loop(threshold)
 
@@ -52,11 +63,16 @@ class ModelTrainer:
             print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
             
             if eval_fn is not None:
-                self.handle_metrics(train_labels, train_preds, 'Training', eval_fn)
-                self.handle_metrics(val_labels, val_preds, 'Validation', eval_fn)
+                # Speichere die Metriken für die Validierung
+                train_metrics = self.handle_metrics(train_labels, train_preds, 'Training', eval_fn)
+                val_metrics = self.handle_metrics(val_labels, val_preds, 'Validation', eval_fn)
+                self.val_metrics_per_epoch.append(val_metrics)
 
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
+
+            if self.checkpoint_path:
+                self.save_checkpoint(epoch + 1, self.checkpoint_path)
 
 
     def training_loop(self, threshold):
@@ -132,6 +148,7 @@ class ModelTrainer:
     def handle_metrics(self, y_true, y_pred, phase, eval_fn):
         metrics = eval_fn(y_true, y_pred)
         print(f"Metrics ({phase}): {metrics}")
+        return metrics
     
 
     def inferencing(self, data_loader):
@@ -155,6 +172,7 @@ class ModelTrainer:
         return np.concatenate(all_y_true), np.concatenate(all_y_probs)
     
 
+# ------------------------------ SAVING ------------------------------
     def save_training_history(self, history_path='data/results/training_history/'):
         """
         Speichert die Trainings- und Validierungsverluste sowie alle Metriken
@@ -196,8 +214,28 @@ class ModelTrainer:
             None
         """
         torch.save(self.model.state_dict(), path)
+    
 
+    def save_checkpoint(self, epoch, path):
+        """
+        Speichert den Modell- und Optimierer-Zustand für die Fortsetzung des Trainings.
+        Args:
+            epoch: Die aktuelle Epoche, bis zu der das Training fortgesetzt werden soll
+            path: Der Pfad, unter dem der Checkpoint gespeichert werden soll
+        """
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'train_losses': self.train_losses,
+            'val_losses': self.val_losses,
+            'train_losses_per_class': self.train_losses_per_class,
+            'val_losses_per_class': self.val_losses_per_class
+        }, path)
+        print(f"Checkpoint nach Epoche {epoch} in {path} gespeichert.")
+    
 
+# ------------------------------ LOADING ------------------------------
     def load_model(self, path):
         """
         Load the model's state_dict from the specified path.
@@ -226,7 +264,7 @@ class ModelTrainer:
                 self.val_losses = df['val_loss'].tolist()
             
             self.val_metrics_per_epoch = []
-            class_names = ['MI', 'NORM', 'OTHER']
+            class_names = ['MI', 'NORM', 'OTHER'] # ERSETZEN!
             
             for _, row in df.iterrows():
                 metrics_dict = {}
@@ -248,3 +286,20 @@ class ModelTrainer:
             print(f"Fehler: Datei '{history_path}' nicht gefunden.")
         except KeyError as e:
             print(f"Fehler: Spalte {e} in der CSV-Datei fehlt. Überprüfen Sie das Dateiformat.")
+
+        
+    def load_checkpoint(self, path):
+        """Lädt den Modell- und Optimierer-Zustand, um das Training fortzusetzen."""
+        try:
+            checkpoint = torch.load(path, map_location=self.device)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.train_losses = checkpoint['train_losses']
+            self.val_losses = checkpoint['val_losses']
+            self.train_losses_per_class = checkpoint['train_losses_per_class']
+            self.val_losses_per_class = checkpoint['val_losses_per_class']
+            print(f"Checkpoint aus {path} erfolgreich geladen. Fortsetzung ab Epoche {checkpoint['epoch']+1}.")
+            return checkpoint['epoch']
+        except FileNotFoundError:
+            print(f"Fehler: Checkpoint-Datei '{path}' nicht gefunden. Starte Training von Grund auf.")
+            return 0 # Beginne von Epoche 0
