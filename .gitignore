@@ -9,3 +9,4 @@ data/preprocessed
 
 # Trained models, to large
 src/models/trained/
+src/models/checkpoints
