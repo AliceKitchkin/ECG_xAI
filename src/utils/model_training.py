@@ -1,6 +1,9 @@
 
+import os
 import torch
+import panda as pd
 import numpy as np
+import datetime
 from tqdm import tqdm
 
 # ------------------------------ CLASS ------------------------------
@@ -150,6 +153,38 @@ class ModelTrainer:
                 all_y_probs.append(probs.cpu().numpy())
                 
         return np.concatenate(all_y_true), np.concatenate(all_y_probs)
+    
+
+    def save_training_history(self, history_path='data/results/training_history/'):
+        """
+        Speichert die Trainings- und Validierungsverluste sowie alle Metriken
+        in einer CSV-Datei.
+        """
+        history = {
+            'epoch': list(range(1, len(self.train_losses) + 1)),
+            'train_loss': self.train_losses,
+            'val_loss': self.val_losses
+        }
+
+        if self.val_metrics_per_epoch:
+            # Hinzufügen der globalen Metriken
+            history['val_accuracy'] = [m.get('accuracy') for m in self.val_metrics_per_epoch]
+            history['val_f1_weighted'] = [m.get('f1_weighted') for m in self.val_metrics_per_epoch]
+            history['val_precision_weighted'] = [m.get('precision_weighted') for m in self.val_metrics_per_epoch]
+            history['val_recall_weighted'] = [m.get('recall_weighted') for m in self.val_metrics_per_epoch]
+            
+            # Hinzufügen der pro-Klasse Metriken
+            class_names = ['MI', 'NORM', 'OTHER']
+            for i, cname in enumerate(class_names):
+                history[f'val_f1_{cname}'] = [m.get('f1_per_class')[i] for m in self.val_metrics_per_epoch]
+                history[f'val_precision_{cname}'] = [m.get('precision_per_class')[i] for m in self.val_metrics_per_epoch]
+                history[f'val_recall_{cname}'] = [m.get('recall_per_class')[i] for m in self.val_metrics_per_epoch]
+
+        filename = 'training_history_' + datetime.now().strftime("-%Y-%m-%d") + ".csv"
+        path = os.path.join(history_path, filename)
+        df = pd.DataFrame(history)
+        df.to_csv(path, index=False)
+        print(f"Trainingshistorie wurde unter {path} gespeichert.")
 
 
     def save_model(self, path):
@@ -172,3 +207,44 @@ class ModelTrainer:
             None
         """
         self.model.load_state_dict(torch.load(path, map_location=self.device))
+
+    
+    def load_training_history(self, history_path):
+        """
+        Lädt die Trainingshistorie aus einer CSV-Datei und speichert sie in 
+        den Instanzvariablen des Trainers.
+
+        Args:
+            history_path (str): Der Pfad zum Ordner mit der Historie.
+            filename (str): Der Name der CSV-Datei.
+        """
+        try:
+            df = pd.read_csv(history_path)
+            
+            self.train_losses = df['train_loss'].tolist()
+            if 'val_loss' in df.columns:
+                self.val_losses = df['val_loss'].tolist()
+            
+            self.val_metrics_per_epoch = []
+            class_names = ['MI', 'NORM', 'OTHER']
+            
+            for _, row in df.iterrows():
+                metrics_dict = {}
+                # Globale Metriken laden
+                metrics_dict['accuracy'] = row['val_accuracy']
+                metrics_dict['f1_weighted'] = row['val_f1_weighted']
+                metrics_dict['precision_weighted'] = row['val_precision_weighted']
+                metrics_dict['recall_weighted'] = row['val_recall_weighted']
+                
+                # Pro-Klasse Metriken laden
+                metrics_dict['f1_per_class'] = [row[f'val_f1_{cname}'] for cname in class_names]
+                metrics_dict['precision_per_class'] = [row[f'val_precision_{cname}'] for cname in class_names]
+                metrics_dict['recall_per_class'] = [row[f'val_recall_{cname}'] for cname in class_names]
+                
+                self.val_metrics_per_epoch.append(metrics_dict)
+                
+            print(f"Trainingshistorie aus '{history_path}' erfolgreich geladen.")
+        except FileNotFoundError:
+            print(f"Fehler: Datei '{history_path}' nicht gefunden.")
+        except KeyError as e:
+            print(f"Fehler: Spalte {e} in der CSV-Datei fehlt. Überprüfen Sie das Dateiformat.")
