@@ -31,10 +31,15 @@ class ModelTrainer:
         self.device = device
         self.scheduler = scheduler
         self.checkpoint_path = checkpoint_path
+
         self.train_losses = []
         self.val_losses = []
+
         self.train_losses_per_class = []
         self.val_losses_per_class = []
+
+        self.val_metrics_per_epoch = []
+        self.train_metrics_per_epoch = []
 
     
     def train(self, num_epochs=10, eval_fn=None, threshold=0.5, start_epoch=0):
@@ -66,13 +71,12 @@ class ModelTrainer:
                 # Speichere die Metriken für die Validierung
                 train_metrics = self.handle_metrics(train_labels, train_preds, 'Training', eval_fn)
                 val_metrics = self.handle_metrics(val_labels, val_preds, 'Validation', eval_fn)
+
+                self.train_metrics_per_epoch.append(train_metrics)
                 self.val_metrics_per_epoch.append(val_metrics)
 
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
-
-            if self.checkpoint_path:
-                self.save_checkpoint(epoch + 1, self.checkpoint_path)
 
 
     def training_loop(self, threshold):
@@ -173,10 +177,11 @@ class ModelTrainer:
     
 
 # ------------------------------ SAVING ------------------------------
-    def save_training_history(self, history_path='data/results/training_history/'):
+    def save_training_history(self, history_path='data/results/training_history/training_history.csv'):
         """
         Speichert die Trainings- und Validierungsverluste sowie alle Metriken
-        in einer CSV-Datei.
+        in einer CSV-Datei, inkl. pro-Klasse Loss für Training und Validation je Epoche.
+        Stellt sicher, dass das Zielverzeichnis existiert.
         """
         history = {
             'epoch': list(range(1, len(self.train_losses) + 1)),
@@ -184,25 +189,39 @@ class ModelTrainer:
             'val_loss': self.val_losses
         }
 
-        if self.val_metrics_per_epoch:
-            # Hinzufügen der globalen Metriken
-            history['val_accuracy'] = [m.get('accuracy') for m in self.val_metrics_per_epoch]
-            history['val_f1_weighted'] = [m.get('f1_weighted') for m in self.val_metrics_per_epoch]
-            history['val_precision_weighted'] = [m.get('precision_weighted') for m in self.val_metrics_per_epoch]
-            history['val_recall_weighted'] = [m.get('recall_weighted') for m in self.val_metrics_per_epoch]
-            
-            # Hinzufügen der pro-Klasse Metriken
-            class_names = ['MI', 'NORM', 'OTHER']
-            for i, cname in enumerate(class_names):
-                history[f'val_f1_{cname}'] = [m.get('f1_per_class')[i] for m in self.val_metrics_per_epoch]
-                history[f'val_precision_{cname}'] = [m.get('precision_per_class')[i] for m in self.val_metrics_per_epoch]
-                history[f'val_recall_{cname}'] = [m.get('recall_per_class')[i] for m in self.val_metrics_per_epoch]
+        # Pro-Klasse Loss für Training und Validation
+        class_names = ['MI', 'NORM', 'OTHER']
+        def add_per_class_losses(losses_per_class, prefix):
+            if losses_per_class:
+                arr = np.array(losses_per_class)
+                for cname, col in zip(class_names, arr.T):
+                    history[f'{prefix}_{cname}'] = col.tolist()
 
-        filename = 'training_history_' + datetime.now().strftime("-%Y-%m-%d") + ".csv"
-        path = os.path.join(history_path, filename)
+        add_per_class_losses(self.train_losses_per_class, 'train_loss')
+        add_per_class_losses(self.val_losses_per_class, 'val_loss')
+
+        # Globale und pro-Klasse Metriken
+        if self.val_metrics_per_epoch:
+            for metric in ['accuracy', 'f1_weighted', 'precision_weighted', 'recall_weighted']:
+                history[f'val_{metric}'] = [m.get(metric) for m in self.val_metrics_per_epoch]
+
+            def add_per_class_metric(metric_key, prefix):
+                for i, cname in enumerate(class_names):
+                    history[f'{prefix}_{cname}'] = [m.get(metric_key)[i] for m in self.val_metrics_per_epoch]
+
+            add_per_class_metric('f1_per_class', 'val_f1')
+            add_per_class_metric('precision_per_class', 'val_precision')
+            add_per_class_metric('recall_per_class', 'val_recall')
+
         df = pd.DataFrame(history)
-        df.to_csv(path, index=False)
-        print(f"Trainingshistorie wurde unter {path} gespeichert.")
+
+        # Ensure the directory exists
+        dir_path = os.path.dirname(history_path)
+        if dir_path and not os.path.exists(dir_path):
+            os.makedirs(dir_path, exist_ok=True)
+        
+        df.to_csv(history_path, index=False)
+        print(f"Trainingshistorie wurde unter {history_path} gespeichert.")
 
 
     def save_model(self, path):
@@ -218,12 +237,12 @@ class ModelTrainer:
 
     def save_checkpoint(self, epoch, path):
         """
-        Speichert den Modell- und Optimierer-Zustand für die Fortsetzung des Trainings.
+        Speichert den Modell-, Optimierer- und ggf. Scheduler-Zustand für die Fortsetzung des Trainings.
         Args:
             epoch: Die aktuelle Epoche, bis zu der das Training fortgesetzt werden soll
             path: Der Pfad, unter dem der Checkpoint gespeichert werden soll
         """
-        torch.save({
+        checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
@@ -231,7 +250,13 @@ class ModelTrainer:
             'val_losses': self.val_losses,
             'train_losses_per_class': self.train_losses_per_class,
             'val_losses_per_class': self.val_losses_per_class
-        }, path)
+        }
+        if self.scheduler is not None:
+            try:
+                checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+            except Exception as e:
+                print(f"Warnung: Scheduler konnte nicht gespeichert werden: {e}")
+        torch.save(checkpoint, path)
         print(f"Checkpoint nach Epoche {epoch} in {path} gespeichert.")
     
 
@@ -246,7 +271,7 @@ class ModelTrainer:
         """
         self.model.load_state_dict(torch.load(path, map_location=self.device))
 
-    
+
     def load_training_history(self, history_path):
         """
         Lädt die Trainingshistorie aus einer CSV-Datei und speichert sie in 
@@ -278,7 +303,7 @@ class ModelTrainer:
 
         
     def load_checkpoint(self, path):
-        """Lädt den Modell- und Optimierer-Zustand, um das Training fortzusetzen."""
+        """Lädt den Modell-, Optimierer- und ggf. Scheduler-Zustand, um das Training fortzusetzen."""
         try:
             checkpoint = torch.load(path, map_location=self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])
@@ -287,7 +312,12 @@ class ModelTrainer:
             self.val_losses = checkpoint['val_losses']
             self.train_losses_per_class = checkpoint['train_losses_per_class']
             self.val_losses_per_class = checkpoint['val_losses_per_class']
-            print(f"Checkpoint aus {path} erfolgreich geladen. Fortsetzung ab Epoche {checkpoint['epoch']+1}.")
+            if self.scheduler is not None and 'scheduler_state_dict' in checkpoint:
+                try:
+                    self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                except Exception as e:
+                    print(f"Warnung: Scheduler konnte nicht geladen werden: {e}")
+            print(f"Checkpoint aus {path} erfolgreich geladen. Fortsetzung ab Epoche {checkpoint['epoch']}.")
             return checkpoint['epoch']
         except FileNotFoundError:
             print(f"Fehler: Checkpoint-Datei '{path}' nicht gefunden. Starte Training von Grund auf.")
