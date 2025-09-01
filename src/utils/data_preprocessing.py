@@ -66,7 +66,6 @@ class DataPreprocessor:
 
     @staticmethod
     def _ensure_class_indices(y):
-        import numpy as np
         return np.argmax(y, axis=1) if y.ndim > 1 else y
     
 
@@ -133,11 +132,11 @@ def load_processed_data(out_dir, prefix, class_names=None):
     Lädt die gespeicherten Daten und Labels als .npy-Dateien aus dem angegebenen Verzeichnis.
     Optional: Wandelt eindimensionale Labels in One-Hot-Labels um, wenn class_names übergeben wird.
     """
+    print(f'Loading processed data from {out_dir} with prefix {prefix}')
     X = np.load(os.path.join(out_dir, f'{prefix}_signals.npy'))
     y = np.load(os.path.join(out_dir, f'{prefix}_labels.npy'))
     
     if class_names is not None:
-        import numpy as np
         if y.ndim == 1:
             y = np.eye(len(class_names))[y]
     return X, y
