@@ -1,3 +1,5 @@
+import os
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score, confusion_matrix
@@ -41,12 +43,47 @@ class ModelEvaluation:
     
 
     @staticmethod
-    def plot_loss_curves(train_losses, val_losses=None, train_losses_per_class=None, val_losses_per_class=None, class_names=None):
-        plt.figure(figsize=(10,6))
+    def plot_loss_curves(train_losses=None, val_losses=None, train_losses_per_class=None, val_losses_per_class=None, class_names=None, figsize=(10, 6), history_path=None):
+        """
+        Plottet Loss-Kurven. Optional kann ein Pfad zu einer Trainings-History-CSV übergeben werden.
+        Wenn history_path gesetzt ist, werden die Werte aus der CSV geplottet und andere Parameter ignoriert.
+        """
+        plt.figure(figsize=figsize)
+
+        if history_path is not None:
+            if not os.path.exists(history_path):
+                raise FileNotFoundError(f"History file not found: {history_path}")
+            history = pd.read_csv(history_path)
+            epochs = history['epoch'] if 'epoch' in history.columns else np.arange(len(history))
+
+            # Plot train/val loss
+            if 'train_loss' in history.columns:
+                plt.plot(epochs, history['train_loss'], label='Train Loss', color='orange', linewidth=2)
+            if 'val_loss' in history.columns:
+                plt.plot(epochs, history['val_loss'], label='Val Loss', color='lightblue', linewidth=2)
+
+            # Plot weitere Metriken falls vorhanden
+            # for col in history.columns:
+            #     if col.startswith('val_f1_'):
+            #         plt.plot(epochs, history[col], label=col, linestyle=':', linewidth=1)
+            #     elif col.startswith('val_precision_'):
+            #         plt.plot(epochs, history[col], label=col, linestyle='--', linewidth=1)
+            #     elif col.startswith('val_recall_'):
+            #         plt.plot(epochs, history[col], label=col, linestyle='-.', linewidth=1)
+
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss / Score')
+            plt.title('Training History')
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+            return
+
         
-        plt.plot(train_losses, label='Train Loss', color='black', linewidth=2)
+        plt.plot(train_losses, label='Train Loss', color='orange', linewidth=2)
         if val_losses is not None:
-            plt.plot(val_losses, label='Val Loss', color='gray', linewidth=2)
+            plt.plot(val_losses, label='Val Loss', color='lightblue', linewidth=2)
         
         n_classes = len(train_losses_per_class[0]) if train_losses_per_class else (len(val_losses_per_class[0]) if val_losses_per_class else 0)
         
@@ -63,10 +100,10 @@ class ModelEvaluation:
                 val_losses_per_class = np.array(val_losses_per_class)
                 for i in range(n_classes):
                     plt.plot(val_losses_per_class[:, i], label=f'Val {names[i]}', linestyle=':', color=colors[i % len(colors)])
-        
+
         plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Loss Curve (gesamt & pro Klasse)')
+        plt.ylabel('Loss / Score')
+        plt.title('Training History')
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
