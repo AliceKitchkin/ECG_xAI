@@ -4,7 +4,7 @@ import torch.nn as nn
 
 # ---------------------------- CLASS ----------------------------
 class VGG16_1D(nn.Module):
-	def __init__(self, in_channels=12, num_classes=5, input_length=1000):
+	def __init__(self, in_channels=12, num_classes=3, input_length=1000):
 		super(VGG16_1D, self).__init__()
 
 		self.features = nn.Sequential(
