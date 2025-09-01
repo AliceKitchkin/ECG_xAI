@@ -250,42 +250,31 @@ class ModelTrainer:
     def load_training_history(self, history_path):
         """
         Lädt die Trainingshistorie aus einer CSV-Datei und speichert sie in 
-        den Instanzvariablen des Trainers.
-
-        Args:
-            history_path (str): Der Pfad zum Ordner mit der Historie.
-            filename (str): Der Name der CSV-Datei.
+        den Instanzvariablen des Trainers. Fehlende Metrik-Spalten werden ignoriert.
         """
         try:
             df = pd.read_csv(history_path)
-            
-            self.train_losses = df['train_loss'].tolist()
-            if 'val_loss' in df.columns:
-                self.val_losses = df['val_loss'].tolist()
-            
+            self.train_losses = df['train_loss'].tolist() if 'train_loss' in df.columns else []
+            self.val_losses = df['val_loss'].tolist() if 'val_loss' in df.columns else []
             self.val_metrics_per_epoch = []
-            class_names = ['MI', 'NORM', 'OTHER'] # ERSETZEN!
-            
+            class_names = ['MI', 'NORM', 'OTHER']
             for _, row in df.iterrows():
                 metrics_dict = {}
-                # Globale Metriken laden
-                metrics_dict['accuracy'] = row['val_accuracy']
-                metrics_dict['f1_weighted'] = row['val_f1_weighted']
-                metrics_dict['precision_weighted'] = row['val_precision_weighted']
-                metrics_dict['recall_weighted'] = row['val_recall_weighted']
-                
-                # Pro-Klasse Metriken laden
-                metrics_dict['f1_per_class'] = [row[f'val_f1_{cname}'] for cname in class_names]
-                metrics_dict['precision_per_class'] = [row[f'val_precision_{cname}'] for cname in class_names]
-                metrics_dict['recall_per_class'] = [row[f'val_recall_{cname}'] for cname in class_names]
-                
+                # Globale Metriken laden (verwende get, falls Spalte fehlt)
+                metrics_dict['accuracy'] = row.get('val_accuracy') if 'val_accuracy' in row else None
+                metrics_dict['f1_weighted'] = row.get('val_f1_weighted') if 'val_f1_weighted' in row else None
+                metrics_dict['precision_weighted'] = row.get('val_precision_weighted') if 'val_precision_weighted' in row else None
+                metrics_dict['recall_weighted'] = row.get('val_recall_weighted') if 'val_recall_weighted' in row else None
+                # Pro-Klasse Metriken laden (verwende get, falls Spalte fehlt)
+                metrics_dict['f1_per_class'] = [row.get(f'val_f1_{cname}') if f'val_f1_{cname}' in row else None for cname in class_names]
+                metrics_dict['precision_per_class'] = [row.get(f'val_precision_{cname}') if f'val_precision_{cname}' in row else None for cname in class_names]
+                metrics_dict['recall_per_class'] = [row.get(f'val_recall_{cname}') if f'val_recall_{cname}' in row else None for cname in class_names]
                 self.val_metrics_per_epoch.append(metrics_dict)
-                
             print(f"Trainingshistorie aus '{history_path}' erfolgreich geladen.")
         except FileNotFoundError:
             print(f"Fehler: Datei '{history_path}' nicht gefunden.")
-        except KeyError as e:
-            print(f"Fehler: Spalte {e} in der CSV-Datei fehlt. Überprüfen Sie das Dateiformat.")
+        except Exception as e:
+            print(f"Fehler beim Laden der Trainingshistorie: {e}")
 
         
     def load_checkpoint(self, path):
