@@ -177,6 +177,7 @@ class ModelTrainer:
                 
         return np.concatenate(all_y_true), np.concatenate(all_y_probs)
 
+
     @staticmethod
     def create_weighted_criterion(y_train, class_names=None):
         """
