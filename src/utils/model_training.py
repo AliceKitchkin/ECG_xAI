@@ -1,6 +1,7 @@
 
 import os
 import torch
+import torch.nn as nn
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -42,7 +43,7 @@ class ModelTrainer:
         self.train_metrics_per_epoch = []
 
     
-    def train(self, num_epochs=10, eval_fn=None, threshold=0.5, start_epoch=0):
+    def train(self, start_epoch=0, num_epochs=5, eval_fn=None, threshold=None):
         """
         Train the model.
         Args:
@@ -54,6 +55,7 @@ class ModelTrainer:
             None
         """
         for epoch in range(start_epoch, num_epochs):
+            print(f"Epoch {epoch+1}/{num_epochs}:")
             train_loss, train_per_class_loss, train_preds, train_labels = self.training_loop(threshold)
             val_loss, val_per_class_loss, val_preds, val_labels = self.validation_loop(threshold)
 
@@ -65,7 +67,7 @@ class ModelTrainer:
             if val_per_class_loss is not None:
                 self.val_losses_per_class.append(val_per_class_loss)
 
-            print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+            print(f"Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
             
             if eval_fn is not None:
                 # Speichere die Metriken für die Validierung
@@ -174,10 +176,42 @@ class ModelTrainer:
                 all_y_probs.append(probs.cpu().numpy())
                 
         return np.concatenate(all_y_true), np.concatenate(all_y_probs)
-    
+
+
+    @staticmethod
+    def create_weighted_criterion(y_train, class_names=None):
+        """
+        Erstellt eine gewichtete BCEWithLogitsLoss basierend auf Klassenhäufigkeiten.
+        
+        Args:
+            y_train: Training labels (np.ndarray)
+            class_names: Optional, Liste der Klassennamen für Debug-Output
+        
+        Returns:
+            nn.BCEWithLogitsLoss: Gewichtete Loss-Funktion
+        """
+        # Klassen-Häufigkeiten berechnen
+        if isinstance(y_train, np.ndarray) and y_train.ndim == 2:
+            class_counts = y_train.sum(axis=0)
+        else:
+            class_counts = np.bincount(y_train)
+        
+        # Gewichte berechnen (inverse Häufigkeit + Normierung)
+        class_weights = 1.0 / class_counts
+        class_weights = class_weights / class_weights.sum() * len(class_counts)
+        class_weights = torch.tensor(class_weights, dtype=torch.float32)
+        
+        # Optional: Debug-Output
+        if class_names:
+            print("Class weights (higher values = rarer classes get more importance):")
+            for name, weight in zip(class_names, class_weights):
+                print(f"  {name}: {weight:.4f}")
+        
+        return nn.BCEWithLogitsLoss(pos_weight=class_weights)
+
 
 # ------------------------------ SAVING ------------------------------
-    def save_training_history(self, history_path='data/results/training_history/training_history.csv'):
+    def save_training_history(self, class_names=None, history_path='data/results/training_history/training_history.csv'):
         """
         Speichert die Trainings- und Validierungsverluste sowie alle Metriken
         in einer CSV-Datei, inkl. pro-Klasse Loss für Training und Validation je Epoche.
@@ -190,7 +224,6 @@ class ModelTrainer:
         }
 
         # Pro-Klasse Loss für Training und Validation
-        class_names = ['MI', 'NORM', 'OTHER']
         def add_per_class_losses(losses_per_class, prefix):
             if losses_per_class:
                 arr = np.array(losses_per_class)
@@ -257,7 +290,8 @@ class ModelTrainer:
             except Exception as e:
                 print(f"Warnung: Scheduler konnte nicht gespeichert werden: {e}")
         torch.save(checkpoint, path)
-        print(f"Checkpoint nach Epoche {epoch} in {path} gespeichert.")
+        print(f"Modell insgesamt trainierte Epochen: {epoch}")
+        print(f"Checkpoint wird gespeichert unter: {path}")
     
 
 # ------------------------------ LOADING ------------------------------
@@ -270,9 +304,10 @@ class ModelTrainer:
             None
         """
         self.model.load_state_dict(torch.load(path, map_location=self.device))
+        print(f"Modell erfolgreich aus '{path}' geladen.")
 
 
-    def load_training_history(self, history_path):
+    def load_training_history(self, class_names=None, history_path='data/results/training_history/training_history.csv'):
         """
         Lädt die Trainingshistorie aus einer CSV-Datei und speichert sie in 
         den Instanzvariablen des Trainers. Fehlende Metrik-Spalten werden ignoriert.
@@ -282,7 +317,7 @@ class ModelTrainer:
             self.train_losses = df['train_loss'].tolist() if 'train_loss' in df.columns else []
             self.val_losses = df['val_loss'].tolist() if 'val_loss' in df.columns else []
             self.val_metrics_per_epoch = []
-            class_names = ['MI', 'NORM', 'OTHER']
+
             for _, row in df.iterrows():
                 metrics_dict = {}
                 # Globale Metriken laden (verwende get, falls Spalte fehlt)
@@ -296,6 +331,7 @@ class ModelTrainer:
                 metrics_dict['recall_per_class'] = [row.get(f'val_recall_{cname}') if f'val_recall_{cname}' in row else None for cname in class_names]
                 self.val_metrics_per_epoch.append(metrics_dict)
             print(f"Trainingshistorie aus '{history_path}' erfolgreich geladen.")
+            
         except FileNotFoundError:
             print(f"Fehler: Datei '{history_path}' nicht gefunden.")
         except Exception as e:
@@ -312,13 +348,18 @@ class ModelTrainer:
             self.val_losses = checkpoint['val_losses']
             self.train_losses_per_class = checkpoint['train_losses_per_class']
             self.val_losses_per_class = checkpoint['val_losses_per_class']
+
             if self.scheduler is not None and 'scheduler_state_dict' in checkpoint:
                 try:
                     self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
                 except Exception as e:
                     print(f"Warnung: Scheduler konnte nicht geladen werden: {e}")
-            print(f"Checkpoint aus {path} erfolgreich geladen. Fortsetzung ab Epoche {checkpoint['epoch']}.")
-            return checkpoint['epoch']
+
+            start_epoch = checkpoint['epoch']
+            print(f"Checkpoint aus {path} erfolgreich geladen. \nFortsetzung ab Epoche {start_epoch}.")
+
+            return start_epoch
+        
         except FileNotFoundError:
             print(f"Fehler: Checkpoint-Datei '{path}' nicht gefunden. Starte Training von Grund auf.")
             return 0 # Beginne von Epoche 0

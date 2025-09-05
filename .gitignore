@@ -1,12 +1,14 @@
 # Python-Bytecode-Dateien und der Cache-Ordner
 *.pyc
+*.pyo
+*.pyd
 __pycache__/
+*.so
 
 # Raw data, to large
-data/raw/ptb_xl_ecg/records100
-data/raw/ptb_xl_ecg/records500
+data/raw/ptb_xl_ecg/
 data/preprocessed
 
 # Trained models, to large
 src/models/trained/
-src/models/checkpoints
+src/models/checkpoints/

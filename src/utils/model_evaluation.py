@@ -111,13 +111,11 @@ class ModelEvaluation:
 
 
     @staticmethod
-    def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False):
+    def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=(7,6)):
+
         cm = confusion_matrix(y_true.argmax(axis=1), y_pred.argmax(axis=1), normalize='true' if normalize else None)
-        plt.figure(figsize=(7,6))
+        plt.figure(figsize=figsize)
         im = plt.imshow(cm, cmap='Blues')
-        plt.title('Confusion Matrix')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
 
         tick_marks = np.arange(len(class_names)) if class_names else np.arange(cm.shape[0])
         plt.xticks(tick_marks, class_names if class_names else tick_marks, rotation=45)
@@ -132,7 +130,10 @@ class ModelEvaluation:
                 plt.text(j, i, format(cm[i, j], fmt),
                          ha="center", va="center",
                          color="white" if cm[i, j] > thresh else "black")
-        
+                
+        plt.title('Confusion Matrix')
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
         plt.tight_layout()
         plt.show()
 
