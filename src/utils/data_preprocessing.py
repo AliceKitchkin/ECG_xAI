@@ -70,26 +70,24 @@ class DataPreprocessor:
     
 
     @staticmethod
-    def relabel_to_mi_norm_other(y, mlb):
+    def relabel_to_mi_norm(y, mlb):
         """
-        Wandelt die Labels so um, dass nur noch MI, NORM und OTHER existieren.
-        Alles außer MI und NORM wird zu OTHER.
+        Wandelt die Labels so um, dass nur noch MI und NORM existieren.
         Args:
             y: np.ndarray, shape (n_samples, n_classes), multi-hot
             mlb: MultiLabelBinarizer
         Returns:
-            np.ndarray, shape (n_samples, 3)
+            np.ndarray, shape (n_samples, 2)
         """
         mi_idx = mlb.classes_.tolist().index('MI') if 'MI' in mlb.classes_ else None
         norm_idx = mlb.classes_.tolist().index('NORM') if 'NORM' in mlb.classes_ else None
         new_y = []
         for row in y:
             if mi_idx is not None and row[mi_idx] == 1:
-                new_y.append([1, 0, 0])  # MI
+                new_y.append([1, 0])  # MI
             elif norm_idx is not None and row[norm_idx] == 1:
-                new_y.append([0, 1, 0])  # NORM
-            else:
-                new_y.append([0, 0, 1])  # OTHER
+                new_y.append([0, 1])  # NORM
+            # else: ignore
         return np.array(new_y)
 
 

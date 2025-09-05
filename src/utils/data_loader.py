@@ -43,7 +43,7 @@ class EKGDataLoader:
 # ----------------------- 1. Lade PTB-XL Daten
 def load_dataset(path, sampling_rate, release=False):
     if os.path.exists(path + 'ptbxl_database.csv'):
-        print(f'Loading PTB-XL data from: {path} ptbxl_database.csv')
+        print(f'Loading PTB-XL data from: {path}ptbxl_database.csv')
         # load and convert annotation data
         Y = pd.read_csv(path + 'ptbxl_database.csv', index_col='ecg_id')
         Y.scp_codes = Y.scp_codes.apply(lambda x: ast.literal_eval(x))
@@ -59,15 +59,19 @@ def load_dataset(path, sampling_rate, release=False):
 def load_raw_data_ptbxl(df, sampling_rate, path):
     if sampling_rate == 100:
         if os.path.exists(path + 'raw100.npy'):
+            print(f'...Loading raw data from: {path}raw100.npy')
             data = np.load(path + 'raw100.npy', allow_pickle=True)
         else:
+            print(f'...Numpy file not found. Loading raw data from .dat files and saving to {path}raw100.npy')
             data = [rdsamp(path + f) for f in tqdm(df.filename_lr)]
             data = np.array([signal for signal, meta in data])
             pickle.dump(data, open(path + 'raw100.npy', 'wb'), protocol=4)
     elif sampling_rate == 500:
         if os.path.exists(path + 'raw500.npy'):
+            print(f'...Loading raw data from: {path}raw500.npy')
             data = np.load(path + 'raw500.npy', allow_pickle=True)
         else:
+            print(f'...Numpy file not found. Loading raw data from .dat files and saving to {path}raw500.npy')
             data = [rdsamp(path + f) for f in tqdm(df.filename_hr)]
             data = np.array([signal for signal, meta in data])
             pickle.dump(data, open(path + 'raw500.npy', 'wb'), protocol=4)
