@@ -152,8 +152,8 @@ class PCA_1D:
         explained_variance_ratio = self.pca.explained_variance_ratio_
         plt.figure(figsize=figsize)
         x_vals = range(1, len(explained_variance_ratio) + 1)
-        plt.bar(x_vals, explained_variance_ratio, alpha=0.5, align='center', label='Individuell erklärte Varianz')
-        plt.step(x_vals, np.cumsum(explained_variance_ratio), where='mid', label='Kumulativ erklärte Varianz')
+        plt.bar(x_vals, explained_variance_ratio, alpha=1, align='center', label='Individuell erklärte Varianz')
+        plt.step(x_vals, np.cumsum(explained_variance_ratio), alpha=1, where='mid', label='Kumulativ erklärte Varianz')
 
         if self.feature_mode == 'leads':
             mode_str = 'Ableitungen als Features'
@@ -177,5 +177,61 @@ class PCA_1D:
         plt.legend(loc='best')
         plt.grid(True)
         plt.xlim(0, len(explained_variance_ratio) + 1)
+        plt.ylim(bottom=0)
+        plt.show()
+    
+
+    @staticmethod
+    def compare_scree_plots(pca_dict, figsize=(15, 6)):
+        """
+        Vergleicht die Scree-Plots zwischen verschiedenen PCA-Objekten.
+        
+        Args:
+            pca_dict (dict): Dictionary mit Labels als Keys und PCA_1D-Objekten als Values
+            figsize (tuple): Größe des Plots
+        """
+        plt.figure(figsize=figsize)
+        
+        x_offset = 0.35
+        
+        max_components = max(len(pca_obj.pca.explained_variance_ratio_) for pca_obj in pca_dict.values())
+        x_vals = np.arange(1, max_components + 1)
+        
+        for i, (label, pca_obj) in enumerate(pca_dict.items()):
+            if not pca_obj.fitted:
+                raise RuntimeError(f"PCA für {label} ist noch nicht gefittet!")
+            
+            explained_variance_ratio = pca_obj.pca.explained_variance_ratio_
+            n_components = len(explained_variance_ratio)
+            x_pos = x_vals[:n_components] + (i - len(pca_dict)/2 + 0.5) * x_offset
+            
+            plt.bar(x_pos, explained_variance_ratio, width=x_offset, 
+                   alpha=1, align='center', label=f'{label} (Individuell)')
+            
+            plt.step(x_vals[:n_components], np.cumsum(explained_variance_ratio), 
+                    where='mid', label=f'{label} (Kumulativ)',
+                    alpha=0.7, linewidth=2)
+
+        mode_str = list(pca_dict.values())[0].feature_mode
+        mode_str = 'Ableitungen als Features' if mode_str == 'leads' else 'Zeitpunkte als Features'
+        
+        plt.title(f'Vergleich der Scree-Plots von MI und NORM\n({mode_str})')
+        plt.xlabel('Hauptkomponente')
+        plt.ylabel('Erklärte Varianz (%)')
+        
+        # Dynamische xticks
+        max_xticks = 15
+        if max_components <= max_xticks:
+            plt.xticks(x_vals)
+        else:
+            step = max(1, max_components // max_xticks)
+            xticks = list(range(1, max_components + 1, step))
+            if xticks[-1] != max_components:
+                xticks.append(max_components)
+            plt.xticks(xticks)
+            
+        plt.legend(loc='best')
+        plt.grid(True)
+        plt.xlim(0, max_components + 1)
         plt.ylim(bottom=0)
         plt.show()
