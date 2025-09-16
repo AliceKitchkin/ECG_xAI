@@ -70,13 +70,13 @@ class VGG16_1D(nn.Module):
 			self.flattened_size = features_out.shape[1] * features_out.shape[2]
 
 		self.classifier = nn.Sequential(
-			nn.Linear(self.flattened_size, 4096),
+			nn.Linear(self.flattened_size, 1024),
 			nn.ReLU(True),
 			nn.Dropout(),
-			nn.Linear(4096, 4096),
+			nn.Linear(1024, 1024),
 			nn.ReLU(True),
 			nn.Dropout(),
-			nn.Linear(4096, num_classes),
+			nn.Linear(1024, num_classes),
 		)
 
 	def forward(self, x):
@@ -85,5 +85,3 @@ class VGG16_1D(nn.Module):
 		x = self.classifier(x)
 		return x
 
-# Beispiel für die Initialisierung:
-# model = VGG16_1D(in_channels=12, num_classes=5, input_length=1000)
