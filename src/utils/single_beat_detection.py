@@ -1,0 +1,661 @@
+import neurokit2 as nk
+from tqdm import tqdm
+import multiprocessing as mp
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import pickle
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+class SingleBeatsDetector:
+    def __init__(self, sampling_rate=100, method='neurokit', lead_for_rpeak_detection=1):
+        """
+        Initialize SingleBeatsDetector with default parameters.
+        
+        Args:
+            sampling_rate: Sampling rate of ECG signals
+            method: Method for R-peak detection and cleaning
+            lead_for_rpeak_detection: Lead index for R-peak detection (usually Lead II = 1)
+            n_workers: Number of workers for parallel processing
+        """
+        self.sampling_rate = sampling_rate
+        self.method = method
+        self.lead_for_rpeak_detection = lead_for_rpeak_detection
+        
+        # Default lead names
+        self.lead_names = ['I', 'II', 'III', 'AVL', 'AVR', 'AVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+
+    # ---------------- CLEANING & R-PEAK DETECTION ----------------
+    @staticmethod
+    def process_single_signal(args, y_relabel, CLASS_NAMES):
+        """
+        Einzelnes Signal verarbeiten - für Parallelisierung.
+        """
+        signal_idx, signal, sampling_rate, method, lead_for_rpeak_detection = args
+        try:
+            np.random.seed(42 + signal_idx)
+            info = {}
+            info["signal_idx"] = signal_idx
+            info["label_idx"] = int(np.argmax(y_relabel[signal_idx]))
+            info["label_name"] = CLASS_NAMES[info["label_idx"]]
+            lead_from_signal = signal[:, lead_for_rpeak_detection]
+            signals_processed, rpeak_info = nk.ecg_process(
+                lead_from_signal, sampling_rate=sampling_rate, method=method
+            )
+            rpeaks = rpeak_info["ECG_R_Peaks"]
+            for k, v in rpeak_info.items():
+                info[k] = v
+            n_leads = signal.shape[1]
+            cleaned_leads = np.zeros_like(signal)
+            for lead_idx in range(n_leads):
+                lead_data = signal[:, lead_idx]
+                cleaned_signal = nk.ecg_clean(lead_data, sampling_rate=sampling_rate, method=method)
+                cleaned_leads[:, lead_idx] = cleaned_signal
+            return signal_idx, cleaned_leads, rpeaks, info
+        except Exception as e:
+            return signal_idx, None, np.array([]), None
+        
+    @staticmethod
+    def clean_and_extract_rpeaks_sequential(ecg_signal, y_relabel, class_names, sampling_rate, method, lead_for_rpeak_detection):
+        """
+        Sequentielle Version für deterministische Ergebnisse (kein Threading).
+        """
+        n_signals = len(ecg_signal)
+        all_cleaned_signals = []
+        all_rpeaks = []
+        detection_info = []
+        from tqdm import tqdm
+        for signal_idx in tqdm(range(n_signals), desc="Processing ECG signals"):
+            try:
+                np.random.seed(42 + signal_idx)
+                info = {}
+                info["signal_idx"] = signal_idx
+                info["label_idx"] = int(np.argmax(y_relabel[signal_idx]))
+                info["label_name"] = class_names[info["label_idx"]]
+                signal = ecg_signal[signal_idx]
+                lead_from_signal = signal[:, lead_for_rpeak_detection]
+                signals_processed, rpeak_info = nk.ecg_process(
+                    lead_from_signal, sampling_rate=sampling_rate, method=method
+                )
+                rpeaks = rpeak_info["ECG_R_Peaks"]
+                for k, v in rpeak_info.items():
+                    info[k] = v
+                n_leads = signal.shape[1]
+                cleaned_leads = np.zeros_like(signal)
+                for lead_idx in range(n_leads):
+                    lead_data = signal[:, lead_idx]
+                    cleaned_signal = nk.ecg_clean(lead_data, sampling_rate=sampling_rate, method=method)
+                    cleaned_leads[:, lead_idx] = cleaned_signal
+                all_cleaned_signals.append(cleaned_leads)
+                all_rpeaks.append(rpeaks)
+                detection_info.append(info)
+            except Exception as e:
+                print(f"Error processing signal {signal_idx}: {e}")
+                all_cleaned_signals.append(None)
+                all_rpeaks.append(np.array([]))
+                detection_info.append(None)
+        return all_cleaned_signals, all_rpeaks, detection_info
+
+    @staticmethod
+    def save_clean_signals_and_rpeaks(all_cleaned_signals, all_rpeaks, detection_info,
+                                output_dir, sampling_rate=100, method='pantompkins1985'):
+        """
+        Speichert R-Peak Detection Ergebnisse als Dateien.
+        
+        Args:
+            all_cleaned_signals: List of cleaned ECG signals (NumPy Arrays)
+            all_rpeaks: List of R-peak arrays  
+            detection_info: List of detection info dictionaries
+            output_dir: Ausgabeordner
+            sampling_rate: Sampling rate
+            method: R-peak detection method
+        """
+        # Erstelle Ausgabeordner
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 1. Alle cleaned signals in einer Datei speichern
+        # Konvertiere zu NumPy Array und handle None-Werte
+        valid_signal_indices = []
+        signals_list = []
+        
+        for i, signal in enumerate(all_cleaned_signals):
+            if signal is not None:
+                # Stelle sicher, dass es ein NumPy Array ist
+                if isinstance(signal, list):
+                    signal = np.array(signal)
+                signals_list.append(signal)
+                valid_signal_indices.append(i)
+        
+        if signals_list:
+            # Speichere alle gültigen Signale als ein 3D Array mit Progress Bar
+            with tqdm(total=1, desc="Saving all_cleaned_signals.npy") as pbar:
+                all_signals_array = np.stack(signals_list, axis=0)
+                np.save(os.path.join(output_dir, 'all_cleaned_signals.npy'), all_signals_array)
+                pbar.update(1)
+        
+        # 2. R-Peaks: Direkt als Pickle speichern (verschiedene Längen)
+        with tqdm(total=1, desc="Saving rpeaks.pkl") as pbar:
+            with open(os.path.join(output_dir, 'rpeaks.pkl'), 'wb') as f:
+                pickle.dump(all_rpeaks, f)
+            pbar.update(1)
+        
+        # 3. Detection Info als Pickle speichern
+        with tqdm(total=1, desc="Saving detection_info.pkl") as pbar:
+            with open(os.path.join(output_dir, 'detection_info.pkl'), 'wb') as f:
+                pickle.dump(detection_info, f)
+            pbar.update(1)
+        
+        # 4. Erweiterte Metadata speichern
+        metadata = {
+            'sampling_rate': sampling_rate,
+            'method': method,
+            'n_signals': len(all_cleaned_signals),
+            'valid_signal_indices': valid_signal_indices,
+            'n_valid_signals': len(valid_signal_indices),
+            'total_rpeaks': sum(len(rpeaks) if rpeaks is not None else 0 for rpeaks in all_rpeaks),
+            'signal_shape': all_signals_array.shape if signals_list else None,
+            'storage_method': 'single_file'  # Für Kompatibilität
+        }
+        
+        with tqdm(total=1, desc="Saving metadata.pkl") as pbar:
+            with open(os.path.join(output_dir, 'metadata.pkl'), 'wb') as f:
+                pickle.dump(metadata, f)
+            pbar.update(1)
+        
+        print(f"R-Peak results saved to: {output_dir}")
+        print(f"   - {metadata['n_signals']} total signals")
+        print(f"   - {metadata['n_valid_signals']} valid signals")
+        print(f"   - {metadata['total_rpeaks']} total R-peaks")
+        print(f"   - Signal array shape: {metadata['signal_shape']}")
+
+    @staticmethod
+    def load_clean_signals_and_rpeaks(input_dir):
+        """
+        Lädt R-Peak Detection Ergebnisse aus Dateien.
+        
+        Returns:
+            tuple: (all_cleaned_signals, all_rpeaks, detection_info, metadata)
+        """
+        # 1. Lade Metadata mit Progress Bar
+        with tqdm(total=1, desc="Loading metadata.pkl") as pbar:
+            with open(os.path.join(input_dir, 'metadata.pkl'), 'rb') as f:
+                metadata = pickle.load(f)
+            pbar.update(1)
+        
+        # Prüfe welche Speichermethode verwendet wurde
+        storage_method = metadata.get('storage_method', 'individual_files')
+        
+        if storage_method == 'single_file' or os.path.exists(os.path.join(input_dir, 'all_cleaned_signals.npy')):
+            all_signals_array = np.load(os.path.join(input_dir, 'all_cleaned_signals.npy')) # Eine große Datei
+            
+            # Rekonstruiere die ursprüngliche Liste-Struktur
+            all_cleaned_signals = [None] * metadata['n_signals']
+            
+            with tqdm(total=len(metadata['valid_signal_indices']), desc="Reconstructing signal list") as pbar:
+                for idx, signal_idx in enumerate(metadata['valid_signal_indices']):
+                    all_cleaned_signals[signal_idx] = all_signals_array[idx]
+                    pbar.update(1)
+                
+        else:
+            print(f"Unsupported storage method")
+            return None, None, None, None
+        
+        # 2. Lade R-Peaks mit Progress Bar
+        with tqdm(total=1, desc="Loading rpeaks.pkl") as pbar:
+            with open(os.path.join(input_dir, 'rpeaks.pkl'), 'rb') as f:
+                all_rpeaks = pickle.load(f)
+            pbar.update(1)
+        
+        # 3. Lade Detection Info mit Progress Bar
+        with tqdm(total=1, desc="Loading detection_info.pkl") as pbar:
+            with open(os.path.join(input_dir, 'detection_info.pkl'), 'rb') as f:
+                detection_info = pickle.load(f)
+            pbar.update(1)
+        
+        print(f"R-Peak results loaded from: {input_dir}")
+        print(f"   - {metadata['n_signals']} total signals")
+        print(f"   - {metadata['n_valid_signals']} valid signals")
+        print(f"   - {metadata['total_rpeaks']} total R-peaks")
+        print(f"   - Storage method: {storage_method}")
+        
+        return all_cleaned_signals, all_rpeaks, detection_info, metadata
+
+    # PLOTTING
+    @staticmethod
+    def plot_one_signal_with_rpeaks(signal_id, cleaned_signals, rpeaks, lead_names, label, figsize=(15, 20)):
+        """
+        Plottet ein einzelnes Signal mit allen 12 Ableitungen und R-Peaks.
+        
+        Args:
+            signal_id: Index des zu plottenden Signals
+            cleaned_signals: Liste aller bereinigten Signale
+            rpeaks: Liste aller R-Peak Arrays
+            lead_names: Namen der 12 Ableitungen
+            figsize: Größe der Figur
+        """
+        
+        # Hole Signal und R-Peaks
+        cleaned_signal = cleaned_signals[signal_id]
+        rpeaks = rpeaks[signal_id]
+        
+        if cleaned_signal is None:
+            print(f"Signal {signal_id} ist None - Skip")
+            return
+        
+        # WICHTIG: Konvertiere zu NumPy Array falls es eine Liste ist
+        if isinstance(cleaned_signal, list):
+            try:
+                cleaned_signal = np.array(cleaned_signal)
+            except Exception as e:
+                print(f"Error converting signal {signal_id} to array for plotting: {e}")
+                return
+        
+        # Prüfe ob Signal die richtige Form hat
+        if cleaned_signal.ndim != 2 or cleaned_signal.shape[1] != 12:
+            print(f"Signal {signal_id} has wrong shape for plotting: {cleaned_signal.shape}, expected (n_samples, 12)")
+            return
+        
+        # Erstelle Figure mit 12 Subplots
+        fig, axes = plt.subplots(12, 1, figsize=figsize)
+        fig.suptitle(f'R-Peaks from Lead II applied to all 12 ECG Leads (Signal ID: {signal_id}, Label: {label})', fontsize=14)
+        
+        # Plotte alle 12 Ableitungen
+        for lead_idx in range(12):
+            lead_data = cleaned_signal[:, lead_idx]
+            
+            # Plotte bereinigte Signale
+            axes[lead_idx].plot(lead_data, color='blue', alpha=0.7, linewidth=1)
+            
+            # Markiere R-Peaks
+            if len(rpeaks) > 0:
+                axes[lead_idx].scatter(rpeaks, lead_data[rpeaks], color='red', s=50, marker='o', zorder=5)
+            
+            # Titel und Labels
+            axes[lead_idx].set_title(f'Lead {lead_names[lead_idx]} - R-peaks from Lead II (Cleaned)')
+            axes[lead_idx].set_ylabel('Amplitude')
+            axes[lead_idx].grid(True, alpha=0.3)
+            
+            # X-Achse nur beim letzten Plot
+            if lead_idx == 11:
+                axes[lead_idx].set_xlabel('Samples')
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+        plt.show()
+
+    @staticmethod
+    # EDGE CASE HANDLING
+    def filter_signals_by_failed_rpeaks(all_cleaned_signals, all_rpeaks):
+        """
+        Filtert Signal-IDs, deren R-Peak-Werte < 0 in der 2. Ableitung (Lead II) sind.
+        
+        """
+        signals_none = []
+        rpeaks_none = []
+        rpeaks_failed = []
+
+        for idx, (signal, rpeaks) in enumerate(zip(all_cleaned_signals, all_rpeaks)):
+
+            # 1. Prüfe auf None
+            if signal is None:
+                signals_none.append(idx)
+                continue
+            if rpeaks is None or len(rpeaks) == 0:
+                rpeaks_none.append(idx)
+                continue
+
+            # 2. Prüfe ob Signal die richtige Form hat
+            if signal.shape[1] < 2:
+                print(f"Warning: Signal {idx} does not have Lead II (index 1). Skipping.")
+                continue
+            
+            # 3. Extrahiere Lead II und V5
+            lead_ii = signal[:, 1]
+            lead_v5 = signal[:, 10]
+
+            # 4. Prüfe ob mindestens ein R-Peak im Lead II und V5 < 0.1 liegt
+            if np.any( (lead_ii[rpeaks] < 0.1) & (lead_v5[rpeaks] < 0.1) ):
+                rpeaks_failed.append(idx)
+
+        return signals_none, rpeaks_none, rpeaks_failed
+    
+ 
+    # ------------------------ SEGMENTATION ------------------------
+    @staticmethod
+    def segment_single_signal(signal_idx, cleaned_signal, rpeaks, sampling_rate, epochs_start, epochs_end):
+        """
+        Einzelnes Signal segmentieren - Standalone Version ohne Threading.
+        """
+        try:
+            if cleaned_signal is None or len(rpeaks) == 0:
+                return signal_idx, None
+
+            signal_beats = {}
+            for lead_idx in range(cleaned_signal.shape[1]):
+                lead_data = cleaned_signal[:, lead_idx]
+                try:
+                    epochs = nk.epochs_create(
+                        lead_data,
+                        events=rpeaks,
+                        sampling_rate=sampling_rate,
+                        epochs_start=epochs_start,
+                        epochs_end=epochs_end
+                    )
+                    signal_beats[lead_idx] = epochs
+                except Exception as e:
+                    signal_beats[lead_idx] = {}
+            return signal_idx, signal_beats
+        except Exception as e:
+            return signal_idx, None
+
+    @staticmethod
+    def segment_ecg_beats_sequential(cleaned_signals, rpeaks_list, sampling_rate=100, epochs_start=-0.2, epochs_end=0.5):
+        """
+        Segment ECG signals into individual beats - Sequential Version (ohne Threading).
+        
+        Args:
+            cleaned_signals: List of cleaned ECG signals 
+            rpeaks_list: List of R-peak arrays
+            sampling_rate: Sampling rate (default: 100)
+            epochs_start: Start of epoch relative to R-peak (seconds)
+            epochs_end: End of epoch relative to R-peak (seconds)
+        
+        Returns:
+            List of segmented beats for each signal and each lead
+        """
+        n_signals = len(cleaned_signals)
+        all_segmented_beats = [None] * n_signals
+
+        print(f"Segmenting {n_signals} signals sequentially...")
+        print(f"Window: {epochs_start}s to {epochs_end}s")
+
+        for signal_idx in tqdm(range(n_signals), desc="Segmenting beats"):
+            try:
+                signal_idx, signal_beats = SingleBeatsDetector.segment_single_signal(
+                    signal_idx,
+                    cleaned_signals[signal_idx],
+                    rpeaks_list[signal_idx],
+                    sampling_rate,
+                    epochs_start,
+                    epochs_end
+                )
+                all_segmented_beats[signal_idx] = signal_beats
+            except Exception as e:
+                print(f"Error segmenting signal {signal_idx}: {e}")
+                all_segmented_beats[signal_idx] = None
+
+        valid_signals = sum(1 for beats in all_segmented_beats if beats is not None)
+        total_beats = 0
+        for signal_beats in all_segmented_beats:
+            if signal_beats is not None and 0 in signal_beats:
+                total_beats += len(signal_beats[0])
+
+        print(f"Segmentierung abgeschlossen!")
+        print(f"   - Verarbeitete Signale: {n_signals}")
+        print(f"   - Gültige Signale: {valid_signals}")
+        print(f"   - Gesamtanzahl Beats: {total_beats}")
+
+        return all_segmented_beats
+
+    # SAVING & LOADING
+    @staticmethod
+    def save_segmented_beats(all_segmented_beats, output_dir, epochs_start=-0.2,
+                         epochs_end=0.5, sampling_rate=100, method='pantompkins1985'):
+        """
+        Speichert segmentierte Beats als Dateien.
+        
+        Args:
+            all_segmented_beats: List of segmented beats for each signal
+            output_dir: Ausgabeordner
+            epochs_start: Start des Fensters (seconds)
+            epochs_end: Ende des Fensters (seconds) 
+            sampling_rate: Sampling rate
+            method: Segmentierungsmethode
+        """
+        # Erstelle Ausgabeordner
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 1. Segmented Beats als NumPy Array speichern
+        with tqdm(total=1, desc="Saving segmented_beats.npy") as pbar:
+            segmented_array = np.array(all_segmented_beats, dtype=object)
+            np.save(os.path.join(output_dir, 'segmented_beats.npy'), segmented_array)
+            pbar.update(1)
+        
+        # 2. Metadata speichern
+        total_beats = 0
+        valid_signals = 0
+        for signal_beats in all_segmented_beats:
+            if signal_beats is not None:
+                valid_signals += 1
+                if 0 in signal_beats:
+                    total_beats += len(signal_beats[0])
+            
+        metadata = {
+            'epochs_start': epochs_start,
+            'epochs_end': epochs_end,
+            'sampling_rate': sampling_rate,
+            'method': method,
+            'n_signals': len(all_segmented_beats),
+            'valid_signals': valid_signals,
+            'total_beats': total_beats,
+            'window_length_samples': int((epochs_end - epochs_start) * sampling_rate)
+        }
+        
+        with tqdm(total=1, desc="Saving segmentation_metadata.pkl") as pbar:
+            with open(os.path.join(output_dir, 'segmentation_metadata.pkl'), 'wb') as f:
+                pickle.dump(metadata, f)
+            pbar.update(1)
+
+        print(f"Segmented beats saved to: {output_dir}")
+        print(f"   - {metadata['n_signals']} total signals")
+        print(f"   - {metadata['valid_signals']} valid signals") 
+        print(f"   - {metadata['total_beats']} total beats")
+        print(f"   - Window: {epochs_start}s to {epochs_end}s")
+
+    @staticmethod
+    def load_segmented_beats(input_dir):
+        """
+        Lädt segmentierte Beats aus Dateien.
+        """
+        # Lade segmentierte Beats als NumPy Array mit tqdm
+        with tqdm(total=1, desc="Loading segmented_beats.npy") as pbar:
+            all_segmented_beats = np.load(os.path.join(input_dir, 'segmented_beats.npy'), allow_pickle=True)
+            pbar.update(1)
+
+        # Lade Metadata mit tqdm
+        with tqdm(total=1, desc="Loading segmentation_metadata.pkl") as pbar:
+            with open(os.path.join(input_dir, 'segmentation_metadata.pkl'), 'rb') as f:
+                metadata = pickle.load(f)
+            pbar.update(1)
+
+        print(f"Segmented beats loaded from: {input_dir}")
+        print(f"   - {metadata['n_signals']} total signals")
+        print(f"   - {metadata['valid_signals']} valid signals")
+        print(f"   - {metadata['total_beats']} total beats") 
+        print(f"   - Window: {metadata['epochs_start']}s to {metadata['epochs_end']}s")
+        print(f"   - Method: {metadata['method']}")
+        print(f"   - Data type: {type(all_segmented_beats)}")  # Debug-Info
+
+        return all_segmented_beats, metadata
+
+    # PLOTTING
+    @staticmethod
+    def plot_beat_segments(all_segmented_beats, signal_idx=0, label='UNKOWN',
+                           max_beats_per_lead=15, lead_names=None,
+                           sampling_frequency=100, fig_size=(12, 16)):
+        """
+        Visualisiert die segmentierten Beats für alle 12 Ableitungen eines EKG-Signals.
+
+        Args:
+            all_segmented_beats: Liste aller segmentierten Beats
+            signal_idx: Index des EKG-Signals aus all_segmented_beats
+            max_beats_per_lead: Maximale Anzahl Beats pro Ableitung zur besseren Übersichtlichkeit
+            lead_names: Liste der Lead-Namen (optional)
+            sampling_frequency: Sampling Rate (Hz)
+        """
+        if signal_idx >= len(all_segmented_beats) or all_segmented_beats[signal_idx] is None:
+            print(f"Signal {signal_idx} ist nicht verfügbar oder fehlerhaft.")
+            return
+        
+        signal_beats = all_segmented_beats[signal_idx]
+        
+        # Erstelle Figure mit 12 Subplots
+        fig, axes = plt.subplots(12, 1, figsize=fig_size)
+        fig.suptitle(f'R-Peaks from Lead II applied to all 12 ECG Leads (Signal ID: {signal_idx}, Label: {label})', fontsize=14)
+
+        # Plotte für jede Ableitung (Lead)
+        for lead_idx in range(12):
+            if lead_idx not in signal_beats:
+                axes[lead_idx].text(0.5, 0.5, f'Lead {lead_names[lead_idx]} - No data',
+                                    ha='center', va='center', transform=axes[lead_idx].transAxes)
+                continue
+                
+            epochs = signal_beats[lead_idx]
+
+            if not epochs:
+                print(f"No epochs for lead {lead_idx} in signal {signal_idx}")
+                continue # Wenn keine Beats für diese Ableitung
+            
+            beat_count = 0
+            # Plotte alle Beats dieser Ableitung übereinander
+            for beat_key in list(epochs.keys())[:max_beats_per_lead]:
+                beat_data = epochs[beat_key].iloc[:, 0]  # Erste Spalte der Beat-Daten
+                time_axis = np.arange(len(beat_data)) / sampling_frequency - 0.2  # Zeit relativ zu R-Peak
+
+                axes[lead_idx].plot(time_axis, beat_data, alpha=0.6, linewidth=1, color='blue')
+                beat_count += 1
+            
+            # R-Peak bei t=0 markieren
+            axes[lead_idx].axvline(x=0, color='red', linestyle='--', alpha=0.8, linewidth=2, label='R-peak')
+
+            # Achsenbeschriftung und Titel
+            axes[lead_idx].set_title(f'Lead {lead_names[lead_idx]} - {beat_count} Segmented Beats')
+            axes[lead_idx].set_ylabel('Amplitude')
+            axes[lead_idx].grid(True, alpha=0.3)
+            axes[lead_idx].set_xlim(-0.2, 0.5)  # Zeitfenster von -0.2s bis +0.5s
+            
+            # Nur bei der letzten Ableitung x-Achsen Label
+            if lead_idx == 11:
+                axes[lead_idx].set_xlabel('Time (s) relative to R-peak')
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+        plt.show()
+
+    # ------------------------ PLOTTING ------------------------
+    @staticmethod
+    def visualize_heartbeats_overlay(X_beats, y_beats, max_beats=20, figsize=(15, 10), window_config=[-0.2, 0.5]):
+        """
+        Overlay multiple heartbeats for all 12 leads (similar to old code style)
+        
+        Args:
+            X_beats: Array of single beats
+            y_beats: Labels for each beat
+            max_beats: Maximum number of beats to overlay
+        """
+        lead_names = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+
+        # Create subplots for all 12 leads
+        fig, axes = plt.subplots(12, 1, figsize=figsize)
+        fig.suptitle("Individual Heart Beats - All 12 Leads", fontsize=14)
+        
+        # Filter beats by label
+        mi_mask = np.array([np.array_equal(label, [1, 0]) for label in y_beats])
+        norm_mask = np.array([np.array_equal(label, [0, 1]) for label in y_beats])
+
+        time_axis = np.linspace(window_config[0], window_config[1], X_beats.shape[2])  # Adjust based on your window
+
+        for lead_idx in range(12):
+            ax = axes[lead_idx]
+            
+            # Plot MI beats
+            mi_beats = X_beats[mi_mask][:max_beats//2]
+            for i, beat in enumerate(mi_beats):
+                color = plt.cm.Reds(0.3 + 0.7 * i / len(mi_beats))
+                ax.plot(time_axis, beat[lead_idx, :], color=color, alpha=0.5, 
+                    label='MI' if i == 0 else "")
+            
+            # Plot NORM beats
+            norm_beats = X_beats[norm_mask][:max_beats//2]
+            for i, beat in enumerate(norm_beats):
+                color = plt.cm.Blues(0.3 + 0.7 * i / len(norm_beats))
+                ax.plot(time_axis, beat[lead_idx, :], color=color, alpha=0.5,
+                    label='NORM' if i == 0 else "")
+            
+            ax.set_title(f"Lead {lead_names[lead_idx]}")
+            ax.set_xlabel("Time (seconds)")
+            ax.set_ylabel("Amplitude")
+            ax.axvline(x=0, color='red', linestyle='--', alpha=0.5, label='R-peak' if lead_idx == 0 else "")
+            ax.grid(True, alpha=0.3)
+            
+            # Only show legend for first lead to avoid clutter
+            if lead_idx == 0:
+                ax.legend()
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.98])
+        plt.show()
+
+    @staticmethod
+    def visualize_average_heartbeats_overlay(X_beats, y_beats, max_beats=50, figsize=(15, 30), window_config=[-0.2, 0.5]):
+        """
+        Show average heartbeats for all 12 leads with overlay of individual beats
+        
+        Args:
+            X_beats: Array of single beats
+            y_beats: Labels for each beat
+            max_beats: Maximum number of beats to use for averaging
+        """
+        lead_names = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
+
+        # Create subplots for all 12 leads
+        fig, axes = plt.subplots(12, 1, figsize=figsize)
+        fig.suptitle("Average Heart Beats - All 12 Leads", fontsize=14)
+        
+        # Filter beats by label
+        mi_mask = np.array([np.array_equal(label, [1, 0]) for label in y_beats])
+        norm_mask = np.array([np.array_equal(label, [0, 1]) for label in y_beats])
+        
+        # Get beats for averaging (limit to max_beats)
+        mi_beats = X_beats[mi_mask][:max_beats//2]
+        norm_beats = X_beats[norm_mask][:max_beats//2]
+        
+        # Calculate averages
+        mi_avg = np.mean(mi_beats, axis=0) if len(mi_beats) > 0 else None
+        norm_avg = np.mean(norm_beats, axis=0) if len(norm_beats) > 0 else None
+
+        time_axis = np.linspace(window_config[0], window_config[1], X_beats.shape[2])  # Adjust based on your window
+
+        for lead_idx in range(12):
+            ax = axes[lead_idx]
+            
+            # Plot individual MI beats (light/transparent)
+            for i, beat in enumerate(mi_beats):
+                color = plt.cm.Reds(0.3 + 0.4 * i / len(mi_beats))
+                ax.plot(time_axis, beat[lead_idx, :], color=color, alpha=0.2, linewidth=0.5)
+            
+            # Plot individual NORM beats (light/transparent)
+            for i, beat in enumerate(norm_beats):
+                color = plt.cm.Blues(0.3 + 0.4 * i / len(norm_beats))
+                ax.plot(time_axis, beat[lead_idx, :], color=color, alpha=0.2, linewidth=0.5)
+            
+            # Plot average lines (bold)
+            if mi_avg is not None:
+                ax.plot(time_axis, mi_avg[lead_idx, :], color='#c63b3a', linewidth=2.3, 
+                    label=f'MI Average')
+            
+            if norm_avg is not None:
+                ax.plot(time_axis, norm_avg[lead_idx, :], color='#539cca', linewidth=2.3,
+                    label=f'NORM Average')
+            
+            ax.set_title(f"Lead {lead_names[lead_idx]}")
+            ax.set_xlabel("Time (seconds)")
+            ax.set_ylabel("Amplitude")
+            ax.axvline(x=0, color='black', linestyle='--', alpha=0.5, label='R-peak' if lead_idx == 0 else "")
+            ax.grid(True, alpha=0.3)
+            
+            # Only show legend for first lead to avoid clutter
+            if lead_idx == 0:
+                ax.legend()
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.98])
+        plt.show()
