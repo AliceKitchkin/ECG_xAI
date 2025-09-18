@@ -48,7 +48,7 @@ class ModelEvaluation:
         Plottet Loss-Kurven. Optional kann ein Pfad zu einer Trainings-History-CSV übergeben werden.
         Wenn history_path gesetzt ist, werden die Werte aus der CSV geplottet und andere Parameter ignoriert.
         """
-        plt.figure(figsize=figsize)
+        plt.figure(figsize=figsize)   
 
         if history_path is not None:
             if not os.path.exists(history_path):
@@ -57,25 +57,20 @@ class ModelEvaluation:
             epochs = history['epoch'] if 'epoch' in history.columns else np.arange(len(history))
 
             # Plot train/val loss
+            max_val = 0
             if 'train_loss' in history.columns:
                 plt.plot(epochs, history['train_loss'], label='Train Loss', color='orange', linewidth=2)
+                max_val = max(max_val, history['train_loss'].max())
             if 'val_loss' in history.columns:
                 plt.plot(epochs, history['val_loss'], label='Val Loss', color='lightblue', linewidth=2)
-
-            # Plot weitere Metriken falls vorhanden
-            # for col in history.columns:
-            #     if col.startswith('val_f1_'):
-            #         plt.plot(epochs, history[col], label=col, linestyle=':', linewidth=1)
-            #     elif col.startswith('val_precision_'):
-            #         plt.plot(epochs, history[col], label=col, linestyle='--', linewidth=1)
-            #     elif col.startswith('val_recall_'):
-            #         plt.plot(epochs, history[col], label=col, linestyle='-.', linewidth=1)
+                max_val = max(max_val, history['val_loss'].max())
 
             plt.xlabel('Epoch')
             plt.ylabel('Loss / Score')
             plt.title('Training History')
             plt.legend()
             plt.grid(True)
+            plt.ylim(0, max(1, max_val))
             plt.tight_layout()
             plt.show()
             return
@@ -109,6 +104,37 @@ class ModelEvaluation:
         plt.tight_layout()
         plt.show()
 
+
+    @staticmethod
+    def plot_metrics_from_history(history_path, metrics=None, figsize=(10, 6)):
+        """
+        Plottet beliebige Metriken aus einer Trainings-History-CSV.
+        metrics: Liste von Metrik-Namen (z.B. ['val_f1_weighted', 'val_precision_weighted', 'val_recall_weighted', 'train_loss_MI', 'val_loss_MI'])
+        """
+        if not os.path.exists(history_path):
+            raise FileNotFoundError(f"History file not found: {history_path}")
+        history = pd.read_csv(history_path)
+        epochs = history['epoch'] if 'epoch' in history.columns else np.arange(len(history))
+
+        if metrics is None:
+            # Alle Spalten außer 'epoch' vorschlagen
+            metrics = [col for col in history.columns if col != 'epoch']
+
+        plt.figure(figsize=figsize)
+        for metric in metrics:
+            if metric in history.columns:
+                plt.plot(epochs, history[metric], label=metric)
+            else:
+                print(f"Warnung: '{metric}' nicht in History gefunden.")
+
+        plt.xlabel('Epoch')
+        plt.ylabel('Score')
+        plt.title('Training Metrics')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+    
 
     @staticmethod
     def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=(7,6)):
