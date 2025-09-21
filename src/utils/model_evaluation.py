@@ -132,6 +132,7 @@ class ModelEvaluation:
         plt.title('Training Metrics')
         plt.legend()
         plt.grid(True)
+        plt.ylim(bottom=0)
         plt.tight_layout()
         plt.show()
     
