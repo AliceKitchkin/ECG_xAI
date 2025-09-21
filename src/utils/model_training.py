@@ -35,12 +35,15 @@ class ModelTrainer:
 
         self.train_losses = []
         self.val_losses = []
+        self.test_losses = []
 
         self.train_losses_per_class = []
         self.val_losses_per_class = []
+        self.test_losses_per_class = []
 
         self.val_metrics_per_epoch = []
         self.train_metrics_per_epoch = []
+        self.test_metrics_per_epoch = []
 
     
     def train(self, start_epoch=0, num_epochs=5, eval_fn=None, threshold=None):
@@ -58,24 +61,32 @@ class ModelTrainer:
             print(f"Epoch {epoch+1}/{num_epochs}:")
             train_loss, train_per_class_loss, train_preds, train_labels = self.training_loop(threshold)
             val_loss, val_per_class_loss, val_preds, val_labels = self.validation_loop(threshold)
+            test_loss, test_per_class_loss, test_preds, test_labels = self.test_loop(threshold)
 
             self.train_losses.append(train_loss)
             self.val_losses.append(val_loss)
+            self.test_losses.append(test_loss)
 
             if train_per_class_loss is not None:
                 self.train_losses_per_class.append(train_per_class_loss)
             if val_per_class_loss is not None:
                 self.val_losses_per_class.append(val_per_class_loss)
+            if test_per_class_loss is not None:
+                self.test_losses_per_class.append(test_per_class_loss)
 
-            print(f"Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+            print(f"Train Loss: {train_loss:.4f}")
+            print(f"Val Loss: {val_loss:.4f}")
+            print(f"Test Loss: {test_loss:.4f}")
             
             if eval_fn is not None:
                 # Speichere die Metriken für die Validierung
                 train_metrics = self.handle_metrics(train_labels, train_preds, 'Training', eval_fn)
                 val_metrics = self.handle_metrics(val_labels, val_preds, 'Validation', eval_fn)
+                test_metrics = self.handle_metrics(test_labels, test_preds, 'Test', eval_fn)
 
                 self.train_metrics_per_epoch.append(train_metrics)
                 self.val_metrics_per_epoch.append(val_metrics)
+                self.test_metrics_per_epoch.append(test_metrics)
 
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
@@ -142,9 +153,43 @@ class ModelTrainer:
         return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_y)
 
 
+    def test_loop(self, threshold):
+        self.model.eval()
+        running_loss = 0.0
+        all_y = []
+        all_pred = []
+        per_class_losses = []
+        
+        with torch.no_grad():
+            for X, y in self.test_loader:
+                X, y = X.to(self.device), y.to(self.device)
+                outputs = self.model(X)
+                loss = self.criterion(outputs, y).item()
+                running_loss += loss * X.size(0)
+
+                probs = torch.sigmoid(outputs)
+                predicted = (probs >= threshold).int() if isinstance(threshold, (float, int)) else (probs >= torch.tensor(threshold, device=probs.device).view(1, -1)).int()
+                
+                all_y.append(y.detach().cpu().numpy())
+                all_pred.append(predicted.detach().cpu().numpy())
+                per_class_losses.append(self.compute_per_class_loss(outputs, y))
+
+        epoch_loss = self.compute_epoch_loss(running_loss, len(self.test_loader.dataset))
+        avg_per_class_loss = np.mean(per_class_losses, axis=0) if per_class_losses else None
+        
+        return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_y)
+
+
     def compute_per_class_loss(self, outputs, targets):
-        bce = torch.nn.BCEWithLogitsLoss(reduction='none')
-        return bce(outputs, targets).mean(dim=0).detach().cpu().numpy()
+        # Prüfe, ob das Kriterium eine pos_weight hat (wie bei create_weighted_criterion)
+        pos_weight = getattr(self.criterion, 'pos_weight', None)
+
+        if pos_weight is not None:
+            bce = torch.nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
+        else:
+            bce = torch.nn.BCEWithLogitsLoss(reduction='none')
+        losses = bce(outputs, targets).mean(dim=0).detach().cpu().numpy()
+        return losses
 
 
     def compute_epoch_loss(self, running_loss, dataset_size):
@@ -159,8 +204,7 @@ class ModelTrainer:
 
     def inferencing(self, data_loader):
         """
-        Führt einen vollständigen Inferenz-Durchlauf aus und gibt wahre Labels und 
-        Wahrscheinlichkeiten zurück.
+        Führt einen vollständigen Inferenz-Durchlauf aus und gibt wahre Labels und Wahrscheinlichkeiten zurück.
         """
         self.model.eval()
         all_y_true = []
