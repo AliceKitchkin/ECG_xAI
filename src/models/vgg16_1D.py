@@ -5,6 +5,13 @@ import torch.nn as nn
 # ---------------------------- CLASS ----------------------------
 class VGG16_1D(nn.Module):
 	def __init__(self, in_channels=12, num_classes=2, input_length=70):
+		"""
+		1D VGG16 model adapted for time series data. Shape of input data should be (batch_size, in_channels, input_length). 
+		Args:
+			in_channels (int): Number of input channels (e.g., 12 for 12-lead ECG).
+			num_classes (int): Number of output classes.
+			input_length (int): Length of the input time series.
+		"""
 		super(VGG16_1D, self).__init__()
 
 		self.features = nn.Sequential(
