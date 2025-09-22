@@ -117,7 +117,7 @@ class ModelTrainer:
             running_loss += loss * X.size(0)
             all_y.append(labels)
             all_pred.append(preds)
-            all_probs.append(probs)
+            all_probs.append(probs.detach().cpu().numpy())
             per_class_losses.append(self.compute_per_class_loss(outputs, targets))
             progress_bar.set_postfix({"batch_loss": loss})
 
@@ -285,31 +285,42 @@ class ModelTrainer:
         history = {
             'epoch': list(range(1, len(self.train_losses) + 1)),
             'train_loss': self.train_losses,
-            'val_loss': self.val_losses
+            'val_loss': self.val_losses,
+            'test_loss': self.test_losses
         }
 
-        # Pro-Klasse Loss für Training und Validation
+        # ------------ Globale Metriken ------------
+        def add_global_metrics(metrics_per_epoch, prefix):
+            if metrics_per_epoch:
+                for metric in ['accuracy', 'f1_weighted', 'precision_weighted', 'recall_weighted']:
+                    history[f'{prefix}_{metric}'] = [m.get(metric) for m in metrics_per_epoch]
+        add_global_metrics(self.train_metrics_per_epoch, 'train')
+        add_global_metrics(self.val_metrics_per_epoch, 'val')
+        add_global_metrics(self.test_metrics_per_epoch, 'test')
+
+        # ------------ Pro-Klasse Metriken ------------
+        def add_per_class_metric(metrics_per_epoch, metric_key, prefix):
+            if metrics_per_epoch and class_names:
+                for i, cname in enumerate(class_names):
+                    history[f'{prefix}_{cname}'] = [m.get(metric_key)[i] if m.get(metric_key) is not None else None for m in metrics_per_epoch]
+        
+        for split, metrics_per_epoch in zip(
+            ['train', 'val', 'test'],
+            [self.train_metrics_per_epoch, self.val_metrics_per_epoch, self.test_metrics_per_epoch]
+        ):
+            add_per_class_metric(metrics_per_epoch, 'f1_per_class', f'{split}_f1')
+            add_per_class_metric(metrics_per_epoch, 'precision_per_class', f'{split}_precision')
+            add_per_class_metric(metrics_per_epoch, 'recall_per_class', f'{split}_recall')
+
+        # ------------ Pro-Klasse Loss ------------
         def add_per_class_losses(losses_per_class, prefix):
             if losses_per_class:
                 arr = np.array(losses_per_class)
                 for cname, col in zip(class_names, arr.T):
                     history[f'{prefix}_{cname}'] = col.tolist()
-
         add_per_class_losses(self.train_losses_per_class, 'train_loss')
         add_per_class_losses(self.val_losses_per_class, 'val_loss')
-
-        # Globale und pro-Klasse Metriken
-        if self.val_metrics_per_epoch:
-            for metric in ['accuracy', 'f1_weighted', 'precision_weighted', 'recall_weighted']:
-                history[f'val_{metric}'] = [m.get(metric) for m in self.val_metrics_per_epoch]
-
-            def add_per_class_metric(metric_key, prefix):
-                for i, cname in enumerate(class_names):
-                    history[f'{prefix}_{cname}'] = [m.get(metric_key)[i] for m in self.val_metrics_per_epoch]
-
-            add_per_class_metric('f1_per_class', 'val_f1')
-            add_per_class_metric('precision_per_class', 'val_precision')
-            add_per_class_metric('recall_per_class', 'val_recall')
+        add_per_class_losses(self.test_losses_per_class, 'test_loss')
 
         df = pd.DataFrame(history)
 
