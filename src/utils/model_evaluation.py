@@ -25,11 +25,18 @@ class ModelEvaluation:
     
 
     @staticmethod
-    def print_metrics(metrics, class_names=None):
+    def print_metrics(metrics, class_names=None, dataset='val'):
         """
         Gibt die Metriken in einem lesbaren Format aus.
         """
-        print("\n--- Evaluation Metrics ---")
+        if dataset == "train":
+            set = "Training"
+        elif dataset == "val":
+            set = "Validation"
+        else:
+            set = "Test"
+            
+        print(f"\n--- Evaluation Metrics for {set} Dataset ---")
         for k, v in metrics.items():
             if isinstance(v, list):
                 if class_names is not None and len(v) == len(class_names):
@@ -43,18 +50,9 @@ class ModelEvaluation:
     
 
     @staticmethod
-    def plot_loss_curves(
-        train_losses=None,
-        val_losses=None,
-        test_losses=None,
-        train_losses_per_class=None,
-        val_losses_per_class=None,
-        test_losses_per_class=None,
-        class_names=None,
-        figsize=(10, 6),
-        history_path=None,
-        show_per_class=True  # <--- NEU: Umschalter für pro-Klasse-Loss
-    ):
+    def plot_loss_curves(train_losses=None, val_losses=None, test_losses=None,
+                         train_losses_per_class=None, val_losses_per_class=None, test_losses_per_class=None,
+                         class_names=None, figsize=(10, 6), history_path=None, show_per_class=True):
         """
         Plottet Loss-Kurven für Gesamt- und pro-Klasse-Loss für Train, Val und Test.
         Optional kann ein Pfad zu einer Trainings-History-CSV übergeben werden.
@@ -135,6 +133,7 @@ class ModelEvaluation:
         plt.title('Training/Validation/Test Loss History')
         plt.legend()
         plt.grid(True)
+        plt.xlim(0, epochs.max())
         plt.tight_layout()
         plt.show()
 
@@ -163,17 +162,17 @@ class ModelEvaluation:
 
         plt.xlabel('Epoch')
         plt.ylabel('Score')
-        plt.title('Training Metrics')
+        plt.title('Metrics')
         plt.legend()
         plt.grid(True)
         plt.ylim(0, 1)
+        plt.xlim(0, epochs.max())
         plt.tight_layout()
         plt.show()
     
 
     @staticmethod
-    def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=(7,6)):
-
+    def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=(7,6), dataset='val'):
         cm = confusion_matrix(y_true.argmax(axis=1), y_pred.argmax(axis=1), normalize='true' if normalize else None)
         plt.figure(figsize=figsize)
         im = plt.imshow(cm, cmap='Blues')
@@ -192,7 +191,14 @@ class ModelEvaluation:
                          ha="center", va="center",
                          color="white" if cm[i, j] > thresh else "black")
                 
-        plt.title('Confusion Matrix')
+        if dataset == "train":
+            set = "Training"
+        elif dataset == "val":
+            set = "Validation"
+        else:
+            set = "Test"
+                
+        plt.title(f'Confusion Matrix on {set} Dataset')
         plt.xlabel('Predicted')
         plt.ylabel('True')
         plt.tight_layout()
