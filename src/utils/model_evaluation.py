@@ -88,7 +88,8 @@ class ModelEvaluation:
             plt.ylabel('Loss / Score')
             plt.title('Training History')
             plt.legend()
-            plt.grid(True)
+            plt.grid(True, alpha=0.5, linewidth=0.7)
+            plt.xticks(np.arange(0, epochs.max() + 1, 1))
             plt.tight_layout()
             plt.show()
             return
@@ -128,12 +129,21 @@ class ModelEvaluation:
                     for i in range(n_classes):
                         plt.plot(test_losses_per_class[:, i], '-.', color=colors[i % len(colors)], label=f'Test {names[i]}')
 
+        if train_losses is not None:
+            n_epochs = len(train_losses)
+        elif val_losses is not None:
+            n_epochs = len(val_losses)
+        elif test_losses is not None:
+            n_epochs = len(test_losses)
+        else:
+            n_epochs = 0
+
         plt.xlabel('Epoch')
         plt.ylabel('Loss / Score')
         plt.title('Training/Validation/Test Loss History')
         plt.legend()
-        plt.grid(True)
-        plt.xlim(0, epochs.max())
+        plt.grid(True, alpha=0.5, linewidth=0.7)
+        plt.xticks(np.arange(0, n_epochs, 1))
         plt.tight_layout()
         plt.show()
 
@@ -164,16 +174,16 @@ class ModelEvaluation:
         plt.ylabel('Score')
         plt.title('Metrics')
         plt.legend()
-        plt.grid(True)
+        plt.grid(True, alpha=0.5, linewidth=0.7)
         plt.ylim(0, 1)
-        plt.xlim(0, epochs.max())
+        plt.xticks(np.arange(0, epochs.max() + 1, 1))
         plt.tight_layout()
         plt.show()
     
 
     @staticmethod
     def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=(7,6), dataset='val'):
-        cm = confusion_matrix(y_true.argmax(axis=1), y_pred.argmax(axis=1), normalize='true' if normalize else None)
+        cm = confusion_matrix(y_true, y_pred, normalize='true' if normalize else None)
         plt.figure(figsize=figsize)
         im = plt.imshow(cm, cmap='Blues')
 

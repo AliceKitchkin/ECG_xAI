@@ -36,6 +36,8 @@ class ModelTrainer:
         self.scheduler = scheduler
         self.checkpoint_path = checkpoint_path
 
+        self.lrs = []
+
         self.train_losses = []
         self.val_losses = []
         self.test_losses = []
@@ -53,22 +55,21 @@ class ModelTrainer:
         self.test_probs_per_epoch = []
 
     
-    def train(self, start_epoch=0, num_epochs=5, eval_fn=None, threshold=None):
+    def train(self, start_epoch=0, num_epochs=5, eval_fn=None):
         """
         Train the model.
         Args:
             num_epochs: Number of training epochs
             eval_fn: Optional evaluation function
-            threshold: Classification threshold
             checkpoint_path: Path to save model checkpoints
         Returns:
             None
         """
         for epoch in range(start_epoch, num_epochs):
-            print(f"Epoch {epoch+1}/{num_epochs}:")
-            train_loss, train_per_class_loss, train_preds, train_probs, train_labels = self.training_loop(threshold)
-            val_loss, val_per_class_loss, val_preds, val_probs, val_labels = self.validation_loop(threshold)
-            test_loss, test_per_class_loss, test_preds, test_probs, test_labels = self.test_loop(threshold)
+            print(f"\nEpoch {epoch+1}/{num_epochs}:")
+            train_loss, train_per_class_loss, train_preds, train_probs, train_labels = self.training_loop()
+            val_loss, val_per_class_loss, val_preds, val_probs, val_labels = self.validation_loop()
+            test_loss, test_per_class_loss, test_preds, test_probs, test_labels = self.test_loop()
 
             self.train_losses.append(train_loss)
             self.val_losses.append(val_loss)
@@ -85,9 +86,10 @@ class ModelTrainer:
             if test_per_class_loss is not None:
                 self.test_losses_per_class.append(test_per_class_loss)
 
-            print(f"Train Loss: {train_loss:.4f}")
-            print(f"Val Loss: {val_loss:.4f}")
-            print(f"Test Loss: {test_loss:.4f}")
+            lr = self.optimizer.param_groups[0]['lr']
+            print(f"Train Loss:\t{train_loss:.4f}\t(LR: {lr:.10f})")
+            print(f"Val Loss:\t{val_loss:.4f}")
+            print(f"Test Loss:\t{test_loss:.4f}")
             
             if eval_fn is not None:
                 # Speichere die Metriken für die Validierung
@@ -102,8 +104,12 @@ class ModelTrainer:
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
 
+            # save learning rate
+            lr = self.optimizer.param_groups[0]['lr']
+            self.lrs.append(lr)
 
-    def training_loop(self, threshold):
+
+    def training_loop(self):
         self.model.train()
         running_loss = 0.0
         all_y = []
@@ -113,7 +119,7 @@ class ModelTrainer:
         progress_bar = tqdm(self.train_loader, desc="Training", leave=False)
 
         for X, y in progress_bar:
-            loss, preds, labels, outputs, targets, probs = self.training_step(X, y, threshold)
+            loss, preds, labels, outputs, targets, probs = self.training_step(X, y)
             running_loss += loss * X.size(0)
             all_y.append(labels)
             all_pred.append(preds)
@@ -127,19 +133,19 @@ class ModelTrainer:
         return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_probs), np.concatenate(all_y)
 
 
-    def training_step(self, X, y, threshold):
+    def training_step(self, X, y):
         X, y = X.to(self.device), y.to(self.device)
         self.optimizer.zero_grad()
         outputs = self.model(X)
         loss = self.criterion(outputs, y)
         loss.backward()
         self.optimizer.step()
-        probs = torch.sigmoid(outputs)
-        predicted = (probs >= threshold).int() if isinstance(threshold, (float, int)) else (probs >= torch.tensor(threshold, device=probs.device).view(1, -1)).int()
+        predicted = outputs.argmax(dim=1)
+        probs = torch.softmax(outputs, dim=1)
         return loss.item(), predicted.detach().cpu().numpy(), y.detach().cpu().numpy(), outputs, y, probs
 
 
-    def validation_loop(self, threshold):
+    def validation_loop(self):
         self.model.eval()
         running_loss = 0.0
         all_y = []
@@ -153,10 +159,8 @@ class ModelTrainer:
                 outputs = self.model(X)
                 loss = self.criterion(outputs, y).item()
                 running_loss += loss * X.size(0)
-
-                probs = torch.sigmoid(outputs)
-                predicted = (probs >= threshold).int() if isinstance(threshold, (float, int)) else (probs >= torch.tensor(threshold, device=probs.device).view(1, -1)).int()
-                
+                probs = torch.softmax(outputs, dim=1)
+                predicted = probs.argmax(dim=1)
                 all_y.append(y.detach().cpu().numpy())
                 all_pred.append(predicted.detach().cpu().numpy())
                 all_probs.append(probs.detach().cpu().numpy())
@@ -168,7 +172,7 @@ class ModelTrainer:
         return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_probs), np.concatenate(all_y)
 
 
-    def test_loop(self, threshold):
+    def test_loop(self):
         self.model.eval()
         running_loss = 0.0
         all_y = []
@@ -182,10 +186,8 @@ class ModelTrainer:
                 outputs = self.model(X)
                 loss = self.criterion(outputs, y).item()
                 running_loss += loss * X.size(0)
-
-                probs = torch.sigmoid(outputs)
-                predicted = (probs >= threshold).int() if isinstance(threshold, (float, int)) else (probs >= torch.tensor(threshold, device=probs.device).view(1, -1)).int()
-                
+                probs = torch.softmax(outputs, dim=1)
+                predicted = probs.argmax(dim=1)
                 all_y.append(y.detach().cpu().numpy())
                 all_pred.append(predicted.detach().cpu().numpy())
                 all_probs.append(probs.detach().cpu().numpy())
@@ -197,16 +199,29 @@ class ModelTrainer:
         return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_probs), np.concatenate(all_y)
 
 
-    def compute_per_class_loss(self, outputs, targets):
-        # Prüfe, ob das Kriterium eine pos_weight hat (wie bei create_weighted_criterion)
-        pos_weight = getattr(self.criterion, 'pos_weight', None)
+    # def compute_per_class_loss(self, outputs, targets):
+    #     # Prüfe, ob das Kriterium eine pos_weight hat (wie bei create_weighted_criterion)
+    #     pos_weight = getattr(self.criterion, 'pos_weight', None)
 
-        if pos_weight is not None:
-            bce = torch.nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
-        else:
-            bce = torch.nn.BCEWithLogitsLoss(reduction='none')
-        losses = bce(outputs, targets).mean(dim=0).detach().cpu().numpy()
-        return losses
+    #     if pos_weight is not None:
+    #         bce = torch.nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
+    #     else:
+    #         bce = torch.nn.BCEWithLogitsLoss(reduction='none')
+    #     losses = bce(outputs, targets).mean(dim=0).detach().cpu().numpy()
+    #     return losses
+    def compute_per_class_loss(self, outputs, targets):
+        # outputs: (batch, num_classes), targets: (batch,)
+        losses = torch.nn.functional.cross_entropy(outputs, targets, reduction='none')
+        # Berechne Mittelwert pro Klasse
+        num_classes = outputs.shape[1]
+        losses_per_class = []
+        for c in range(num_classes):
+            mask = (targets == c)
+            if mask.sum() > 0:
+                losses_per_class.append(losses[mask].mean().item())
+            else:
+                losses_per_class.append(0.0)
+        return np.array(losses_per_class)
 
 
     def compute_epoch_loss(self, running_loss, dataset_size):
@@ -215,7 +230,22 @@ class ModelTrainer:
 
     def handle_metrics(self, y_true, y_pred, phase, eval_fn):
         metrics = eval_fn(y_true, y_pred)
-        print(f"Metrics ({phase}): {metrics}")
+
+        def round_metrics(obj):
+            if isinstance(obj, float):
+                return round(obj, 4)
+            elif isinstance(obj, list):
+                return [round_metrics(x) for x in obj]
+            elif isinstance(obj, dict):
+                return {k: round_metrics(v) for k, v in obj.items()}
+            else:
+                return obj
+        metrics_rounded = round_metrics(metrics)
+
+        if phase == "Test":
+            print(f"Metrics ({phase}):\t\t{metrics_rounded}")  # doppelter Tab für Test
+        else:
+            print(f"Metrics ({phase}):\t{metrics_rounded}")    # einfacher Tab für die anderen
         return metrics
     
 
@@ -231,8 +261,7 @@ class ModelTrainer:
             for X, y in data_loader:
                 X, y = X.to(self.device), y.to(self.device)
                 outputs = self.model(X)
-                probs = torch.sigmoid(outputs)
-                
+                probs = torch.softmax(outputs, dim=1)
                 all_y_true.append(y.cpu().numpy())
                 all_y_probs.append(probs.cpu().numpy())
                 
@@ -242,15 +271,16 @@ class ModelTrainer:
     @staticmethod
     def create_weighted_criterion(y_train, class_names=None, weight_factor=1.0):
         """
-        Erstellt eine gewichtete BCEWithLogitsLoss basierend auf Klassenhäufigkeiten.
-        
+        Erstellt eine gewichtete Loss-Funktion (BCEWithLogitsLoss oder CrossEntropyLoss) basierend auf Klassenhäufigkeiten.
+
         Args:
             y_train: Training labels (np.ndarray)
             class_names: Optional, Liste der Klassennamen für Debug-Output
-            weight_factor: Faktor zur Abschwächung der Gewichtung (1.0 = Originalgewichtung (stark), 0.5 = halb so stark, 0 = Keine Gewichtung (wie Standard BCE))
-        
+            weight_factor: Faktor zur Abschwächung der Gewichtung (1.0 = Originalgewichtung, 0 = keine Gewichtung)
+            loss_type: "bce" (default) für BCEWithLogitsLoss, "ce" für CrossEntropyLoss
+
         Returns:
-            nn.BCEWithLogitsLoss: Gewichtete Loss-Funktion
+            Loss-Funktion (nn.Module)
         """
         # Klassen-Häufigkeiten berechnen
         if isinstance(y_train, np.ndarray) and y_train.ndim == 2:
@@ -265,14 +295,8 @@ class ModelTrainer:
         # Gewichtung entschärfen:
         class_weights = 1.0 + (class_weights - 1.0) * weight_factor
         class_weights = torch.tensor(class_weights, dtype=torch.float32)
-        
-        # Optional: Debug-Output
-        if class_names:
-            print("Class weights (higher values = rarer classes get more importance):")
-            for name, weight in zip(class_names, class_weights):
-                print(f"  {name}: {weight:.4f}")
-        
-        return nn.BCEWithLogitsLoss(pos_weight=class_weights)
+
+        return nn.CrossEntropyLoss(weight=class_weights)
 
 
 # ------------------------------ SAVING ------------------------------
@@ -286,7 +310,8 @@ class ModelTrainer:
             'epoch': list(range(1, len(self.train_losses) + 1)),
             'train_loss': self.train_losses,
             'val_loss': self.val_losses,
-            'test_loss': self.test_losses
+            'test_loss': self.test_losses,
+            'learning_rate': self.lrs[:len(self.train_losses)]
         }
 
         # ------------ Globale Metriken ------------

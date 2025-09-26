@@ -58,16 +58,16 @@ class VGG16_1D(nn.Module):
 			nn.MaxPool1d(kernel_size=2, stride=2),
 
 			# Block 5
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
-			nn.BatchNorm1d(512),
-			nn.ReLU(inplace=True),
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
-			nn.BatchNorm1d(512),
-			nn.ReLU(inplace=True),
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
-			nn.BatchNorm1d(512),
-			nn.ReLU(inplace=True),
-			nn.MaxPool1d(kernel_size=2, stride=2),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.BatchNorm1d(512),
+			# nn.ReLU(inplace=True),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.BatchNorm1d(512),
+			# nn.ReLU(inplace=True),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.BatchNorm1d(512),
+			# nn.ReLU(inplace=True),
+			# nn.MaxPool1d(kernel_size=2, stride=2),
 		)
 
 		# Dynamisch berechnen, wie viele Features nach den Convs übrig sind
@@ -77,13 +77,13 @@ class VGG16_1D(nn.Module):
 			self.flattened_size = features_out.shape[1] * features_out.shape[2]
 
 		self.classifier = nn.Sequential(
-			nn.Linear(self.flattened_size, 512),
+			nn.Linear(self.flattened_size, 256),
 			nn.ReLU(True),
-			nn.Dropout(p=0.6), 
-			nn.Linear(512, 512),
+			nn.Dropout(p=0.5), 
+			nn.Linear(256, 256),
 			nn.ReLU(True),
-			nn.Dropout(p=0.6),
-			nn.Linear(512, num_classes),
+			nn.Dropout(p=0.5),
+			nn.Linear(256, num_classes),
 		)
 
 	def forward(self, x):
