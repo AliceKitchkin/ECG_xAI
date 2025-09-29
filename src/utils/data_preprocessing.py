@@ -21,7 +21,7 @@ class DataPreprocessor:
             y_labels: Corresponding labels.
             meta_df: DataFrame containing metadata with stratified folds.
         Returns:
-            (X_train, y_train, X_val, y_val, X_test, y_test)
+            X_train, y_train, X_val, y_val, X_test, y_test
         """
         X_train = X_signals[meta_df.strat_fold < 9]
         y_train = y_labels[meta_df.strat_fold < 9]
@@ -36,6 +36,13 @@ class DataPreprocessor:
     def preprocess_signals(self, X_train, X_validation, X_test, outputfolder):
         """
         Preprocess the input signals by standardizing them.
+        Args:
+            X_train: Training signals.
+            X_validation: Validation signals.
+            X_test: Test signals.
+            outputfolder: Folder to save the fitted scaler.
+        Returns:
+            X_train_std, X_val_std, X_test_std: Standardized signals.
         """
         # Alle Beats zu einem Vektor zusammenfassen
         all_train_values = np.concatenate(X_train).reshape(-1, 1).astype(float)
@@ -53,6 +60,13 @@ class DataPreprocessor:
     def save_signals(self, X_train, y_train, X_val, y_val, X_test, y_test, outputfolder):
         """
         Save the preprocessed signals and labels to the specified output folder.
+        Args:
+            X_train, y_train: Training signals and labels.
+            X_val, y_val: Validation signals and labels.
+            X_test, y_test: Test signals and labels.
+            outputfolder: Folder to save the processed data.
+        Returns:
+            None
         """
         self.save_processed_data(X_train, y_train, outputfolder, 'train')
         self.save_processed_data(X_val, y_val, outputfolder, 'val')
@@ -62,8 +76,12 @@ class DataPreprocessor:
     @staticmethod
     def relabel_to_mi_norm(y, mlb):
         """
-        Wandelt die Labels so um, dass nur noch MI und NORM existieren.
-        Gibt Integer-Labels zurück: 0=MI, 1=NORM
+        Relabel multi-label encoded labels to single-label: 0 for MI, 1 for NORM.
+        Args:
+            y: Multi-label encoded labels.
+            mlb: MultiLabelBinarizer instance used for encoding.
+        Returns:
+            new_y: Single-label encoded labels.
         """
         mi_idx = mlb.classes_.tolist().index('MI') if 'MI' in mlb.classes_ else None
         norm_idx = mlb.classes_.tolist().index('NORM') if 'NORM' in mlb.classes_ else None
@@ -78,7 +96,13 @@ class DataPreprocessor:
 
 
     def save_scaler(self, output_folder):
-        """Save the fitted scaler to a pickle file."""
+        """
+        Save the fitted scaler to a pickle file.
+        Args:
+            output_folder: Folder to save the scaler.
+        Returns:
+            None
+        """
         if self.scaler is None:
             raise ValueError("Scaler has not been fitted yet.")
         os.makedirs(output_folder, exist_ok=True)
@@ -87,14 +111,26 @@ class DataPreprocessor:
 
     
     def load_scaler(self, output_folder):
-        """Load a previously saved scaler."""
+        """
+        Load the scaler from a pickle file.
+        Args:
+            output_folder: Folder where the scaler is saved.
+        Returns:
+            None
+        """
         scaler_path = os.path.join(output_folder, 'standard_scaler.pkl')
         with open(scaler_path, 'rb') as ss_file:
             self.scaler = pickle.load(ss_file)
 
 
     def _apply_standardizer(self, X):
-        """Apply the fitted scaler to input data."""
+        """
+        Apply the fitted scaler to input data.
+        Args:
+            X: Input signals.
+        Returns:
+            Transformed signals.
+        """
         X = np.asarray(X)
         return self.scaler.transform(X.reshape(-1, 1)).reshape(X.shape)
 
@@ -102,7 +138,14 @@ class DataPreprocessor:
     @staticmethod
     def save_processed_data(X, y, out_dir, prefix):
         """
-        Speichert die Daten und Labels als .npy-Dateien im angegebenen Verzeichnis.
+        Save the processed data and labels as .npy files in the specified directory.
+        Args:
+            X: Processed signals.
+            y: Corresponding labels.
+            out_dir: Directory to save the files.
+            prefix: Prefix for the filenames.
+        Returns:
+            None
         """
         os.makedirs(out_dir, exist_ok=True)
         np.save(os.path.join(out_dir, f'{prefix}_signals.npy'), X)
@@ -112,7 +155,12 @@ class DataPreprocessor:
     @staticmethod
     def load_processed_data(out_dir, prefix):
         """
-        Lädt die gespeicherten Daten und Labels als .npy-Dateien aus dem angegebenen Verzeichnis.
+        Load the saved data and labels as .npy files from the specified directory.
+        Args:
+            out_dir: Directory where the files are saved.
+            prefix: Prefix for the filenames.
+        Returns:
+            X, y: Loaded signals and labels.
         """
         print(f'Loading processed data from {out_dir} with prefix {prefix}')
         X = np.load(os.path.join(out_dir, f'{prefix}_signals.npy'))
