@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score, confusion_matrix
+from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score, confusion_matrix, roc_curve, auc, PrecisionRecallDisplay
 
 
 class ModelEvaluation:
@@ -213,5 +213,83 @@ class ModelEvaluation:
         plt.ylabel('True')
         plt.tight_layout()
         plt.show()
+
+
+    @staticmethod
+    def plot_learning_rate(history_path, figsize=(12, 4)):
+        """
+        Plottet den Verlauf der Lernrate aus der Trainings-History.
+        """
+        history = pd.read_csv(history_path)
+
+        if 'learning_rate' not in history.columns:
+            raise ValueError("Die Spalte 'learning_rate' wurde in der History nicht gefunden.")
+
+        plt.figure(figsize=figsize)
+        plt.plot(history['learning_rate'])
+        plt.xlabel('Epoch')
+        plt.ylabel('Learning Rate')
+        plt.title('Learning Rate Verlauf')
+        plt.show()
+
+    
+    @staticmethod
+    def plot_roc(y_true_test, y_probs_test, dataset, figsize=(6, 5)):
+        """
+        Plottet die ROC-Kurve für beide Klassen.
+        """
+        # ROC für MI (Klasse 0)
+        fpr_mi, tpr_mi, _ = roc_curve(y_true_test, y_probs_test[:, 0], pos_label=0)
+        auc_mi = auc(fpr_mi, tpr_mi)
+
+        # ROC für NORM (Klasse 1)
+        fpr_norm, tpr_norm, _ = roc_curve(y_true_test, y_probs_test[:, 1], pos_label=1)
+        auc_norm = auc(fpr_norm, tpr_norm)
+
+        plt.figure(figsize=figsize)
+        plt.plot(fpr_mi, tpr_mi, color='darkred', lw=2, label=f'MI (AUC = {auc_mi:.2f})')
+        plt.plot(fpr_norm, tpr_norm, color='green', lw=2, label=f'NORM (AUC = {auc_norm:.2f})')
+        plt.plot([0, 1], [0, 1], color='grey', lw=1, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title(f'ROC Curve für MI und NORM ({dataset})')
+        plt.legend(loc="lower right")
+        plt.show()
+
+
+    @staticmethod
+    def plot_precision_recall_curve(y_true, y_probs, dataset, figsize=(6, 5)):
+        """
+        Plottet die Precision-Recall-Kurve für beide Klassen.
+        """
+        plt.figure(figsize=figsize)
+
+        # MI (Klasse 0)
+        disp_mi = PrecisionRecallDisplay.from_predictions(
+            y_true == 0,
+            y_probs[:, 0],
+            name="MI",
+            color="darkred",
+            plot_chance_level=True,
+            despine=True,
+            ax=plt.gca()
+        )
+
+        # NORM (Klasse 1)
+        disp_norm = PrecisionRecallDisplay.from_predictions(
+            y_true == 1,
+            y_probs[:, 1],
+            name="NORM",
+            color="green",
+            plot_chance_level=True,
+            despine=True,
+            ax=plt.gca()
+        )
+
+        plt.title(f"Precision-Recall Curve für MI und NORM ({dataset})")
+        plt.show()
+
 
 
