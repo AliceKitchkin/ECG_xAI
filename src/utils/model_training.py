@@ -110,6 +110,15 @@ class ModelTrainer:
 
 
     def training_loop(self):
+        """
+        Loops over the training data for one epoch.
+        Returns:
+            epoch_loss: Average loss for the epoch
+            avg_per_class_loss: Average loss per class for the epoch
+            all_pred: All predictions for the epoch
+            all_probs: All probabilities for the epoch
+            all_y: All true labels for the epoch
+        """
         self.model.train()
         running_loss = 0.0
         all_y = []
@@ -134,6 +143,19 @@ class ModelTrainer:
 
 
     def training_step(self, X, y):
+        """
+        Performs a single training step (forward + backward pass).
+        Args:
+            X: Input data
+            y: True labels
+        Returns:
+            loss: Loss value for the batch
+            predicted: Predicted labels for the batch
+            y: True labels for the batch
+            outputs: Raw model outputs (logits) for the batch
+            targets: True labels tensor for the batch
+            probs: Predicted probabilities for the batch
+        """
         X, y = X.to(self.device), y.to(self.device)
         self.optimizer.zero_grad()
         outputs = self.model(X)
@@ -146,6 +168,15 @@ class ModelTrainer:
 
 
     def validation_loop(self):
+        """
+        Loops over the validation data for one epoch.
+        Returns:
+            epoch_loss: Average loss for the epoch
+            avg_per_class_loss: Average loss per class for the epoch
+            all_pred: All predictions for the epoch
+            all_probs: All probabilities for the epoch
+            all_y: All true labels for the epoch
+        """
         self.model.eval()
         running_loss = 0.0
         all_y = []
@@ -173,6 +204,15 @@ class ModelTrainer:
 
 
     def test_loop(self):
+        """
+        Loops over the test data for one epoch.
+        Returns:
+            epoch_loss: Average loss for the epoch
+            avg_per_class_loss: Average loss per class for the epoch
+            all_pred: All predictions for the epoch
+            all_probs: All probabilities for the epoch
+            all_y: All true labels for the epoch
+        """
         self.model.eval()
         running_loss = 0.0
         all_y = []
@@ -199,17 +239,15 @@ class ModelTrainer:
         return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_probs), np.concatenate(all_y)
 
 
-    # def compute_per_class_loss(self, outputs, targets):
-    #     # Prüfe, ob das Kriterium eine pos_weight hat (wie bei create_weighted_criterion)
-    #     pos_weight = getattr(self.criterion, 'pos_weight', None)
-
-    #     if pos_weight is not None:
-    #         bce = torch.nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
-    #     else:
-    #         bce = torch.nn.BCEWithLogitsLoss(reduction='none')
-    #     losses = bce(outputs, targets).mean(dim=0).detach().cpu().numpy()
-    #     return losses
     def compute_per_class_loss(self, outputs, targets):
+        """
+        Calculates the average loss per class for a batch.
+        Args:
+            outputs: Model outputs (logits) for the batch
+            targets: True labels tensor for the batch
+        Returns:
+            losses_per_class: Numpy array of average losses per class
+        """
         # outputs: (batch, num_classes), targets: (batch,)
         losses = torch.nn.functional.cross_entropy(outputs, targets, reduction='none')
         # Berechne Mittelwert pro Klasse
@@ -225,10 +263,28 @@ class ModelTrainer:
 
 
     def compute_epoch_loss(self, running_loss, dataset_size):
+        """
+        Computes the average loss for an epoch.
+        Args:
+            running_loss: Cumulative loss for the epoch
+            dataset_size: Number of samples in the dataset
+        Returns:
+            Average loss for the epoch
+        """
         return running_loss / dataset_size
 
 
     def handle_metrics(self, y_true, y_pred, phase, eval_fn):
+        """
+        Calculates and prints metrics using the provided evaluation function.
+        Args:
+            y_true: True labels
+            y_pred: Predicted labels
+            phase: "Training", "Validation" or "Test"
+            eval_fn: Evaluation function that takes (y_true, y_pred) and returns a dict of metrics
+        Returns:
+            metrics: Dictionary of calculated metrics
+        """
         metrics = eval_fn(y_true, y_pred)
 
         def round_metrics(obj):
@@ -251,7 +307,12 @@ class ModelTrainer:
 
     def inferencing(self, data_loader):
         """
-        Führt einen vollständigen Inferenz-Durchlauf aus und gibt wahre Labels und Wahrscheinlichkeiten zurück.
+        Runs inference on the provided data loader.
+        Args:
+            data_loader: DataLoader for the dataset to run inference on
+        Returns:
+            all_y_true: All true labels
+            all_y_probs: All predicted probabilities
         """
         self.model.eval()
         all_y_true = []
@@ -269,18 +330,14 @@ class ModelTrainer:
 
 
     @staticmethod
-    def create_weighted_criterion(y_train, class_names=None, weight_factor=1.0):
+    def create_weighted_criterion(y_train, weight_factor=1.0):
         """
-        Erstellt eine gewichtete Loss-Funktion (BCEWithLogitsLoss oder CrossEntropyLoss) basierend auf Klassenhäufigkeiten.
-
+        Creates a weighted CrossEntropyLoss based on class frequencies in y_train.
         Args:
-            y_train: Training labels (np.ndarray)
-            class_names: Optional, Liste der Klassennamen für Debug-Output
-            weight_factor: Faktor zur Abschwächung der Gewichtung (1.0 = Originalgewichtung, 0 = keine Gewichtung)
-            loss_type: "bce" (default) für BCEWithLogitsLoss, "ce" für CrossEntropyLoss
-
+            y_train: Array of training labels
+            weight_factor: Factor to adjust the strength of the weighting (1.0 = full weighting, 0.0 = no weighting)
         Returns:
-            Loss-Funktion (nn.Module)
+            Weighted CrossEntropyLoss
         """
         # Klassen-Häufigkeiten berechnen
         if isinstance(y_train, np.ndarray) and y_train.ndim == 2:
@@ -302,9 +359,12 @@ class ModelTrainer:
 # ------------------------------ SAVING ------------------------------
     def save_training_history(self, class_names=None, history_path='data/results/training_history/training_history.csv'):
         """
-        Speichert die Trainings- und Validierungsverluste sowie alle Metriken
-        in einer CSV-Datei, inkl. pro-Klasse Loss für Training und Validation je Epoche.
-        Stellt sicher, dass das Zielverzeichnis existiert.
+        Saves the training history to a CSV file.
+        Args:
+            class_names: List of class names for per-class metrics
+            history_path: Path to save the CSV file
+        Returns:
+            None
         """
         history = {
             'epoch': list(range(1, len(self.train_losses) + 1)),
@@ -371,10 +431,12 @@ class ModelTrainer:
 
     def save_checkpoint(self, epoch, path):
         """
-        Speichert den Modell-, Optimierer- und ggf. Scheduler-Zustand für die Fortsetzung des Trainings.
+        Saves a checkpoint with model, optimizer, and scheduler states.
         Args:
-            epoch: Die aktuelle Epoche, bis zu der das Training fortgesetzt werden soll
-            path: Der Pfad, unter dem der Checkpoint gespeichert werden soll
+            epoch: Current epoch number
+            path: Path to save the checkpoint
+        Returns:
+            None
         """
         checkpoint = {
             'epoch': epoch,
@@ -410,8 +472,12 @@ class ModelTrainer:
 
     def load_training_history(self, class_names=None, history_path='data/results/training_history/training_history.csv'):
         """
-        Lädt die Trainingshistorie aus einer CSV-Datei und speichert sie in 
-        den Instanzvariablen des Trainers. Fehlende Metrik-Spalten werden ignoriert.
+        Loads the training history from a CSV file.
+        Args:
+            class_names: List of class names for per-class metrics
+            history_path: Path to the CSV file
+        Returns:
+            None
         """
         try:
             df = pd.read_csv(history_path)
@@ -440,7 +506,13 @@ class ModelTrainer:
 
         
     def load_checkpoint(self, path):
-        """Lädt den Modell-, Optimierer- und ggf. Scheduler-Zustand, um das Training fortzusetzen."""
+        """
+        Loads a checkpoint and restores model, optimizer, and scheduler states.
+        Args:
+            path: Path to the checkpoint file
+        Returns:
+            start_epoch: Epoch to resume training from
+        """
         try:
             checkpoint = torch.load(path, map_location=self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])
