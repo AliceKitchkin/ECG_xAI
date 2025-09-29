@@ -10,7 +10,7 @@ from tqdm import tqdm
 # ------------------------------ CLASS ------------------------------
 class ModelTrainer:
 
-    def __init__(self, model, train_loader, val_loader, optimizer, criterion, device='cpu', scheduler=None, checkpoint_path=None):
+    def __init__(self, model, train_loader, val_loader, test_loader, optimizer, criterion, device='cpu', scheduler=None, checkpoint_path=None):
         """
         Initialize the ModelTrainer.
         Args:
@@ -25,101 +25,163 @@ class ModelTrainer:
             None
         """
         self.model = model.to(device)
+
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.test_loader = test_loader
+
         self.optimizer = optimizer
         self.criterion = criterion
         self.device = device
         self.scheduler = scheduler
         self.checkpoint_path = checkpoint_path
 
+        self.lrs = []
+
         self.train_losses = []
         self.val_losses = []
+        self.test_losses = []
 
         self.train_losses_per_class = []
         self.val_losses_per_class = []
+        self.test_losses_per_class = []
 
         self.val_metrics_per_epoch = []
         self.train_metrics_per_epoch = []
+        self.test_metrics_per_epoch = []
+
+        self.train_probs_per_epoch = []
+        self.val_probs_per_epoch = []
+        self.test_probs_per_epoch = []
 
     
-    def train(self, start_epoch=0, num_epochs=5, eval_fn=None, threshold=None):
+    def train(self, start_epoch=0, num_epochs=5, eval_fn=None):
         """
         Train the model.
         Args:
             num_epochs: Number of training epochs
             eval_fn: Optional evaluation function
-            threshold: Classification threshold
             checkpoint_path: Path to save model checkpoints
         Returns:
             None
         """
         for epoch in range(start_epoch, num_epochs):
-            print(f"Epoch {epoch+1}/{num_epochs}:")
-            train_loss, train_per_class_loss, train_preds, train_labels = self.training_loop(threshold)
-            val_loss, val_per_class_loss, val_preds, val_labels = self.validation_loop(threshold)
+            print(f"\nEpoch {epoch+1}/{num_epochs}:")
+            train_loss, train_per_class_loss, train_preds, train_probs, train_labels = self.training_loop()
+            val_loss, val_per_class_loss, val_preds, val_probs, val_labels = self.validation_loop()
+            test_loss, test_per_class_loss, test_preds, test_probs, test_labels = self.test_loop()
 
             self.train_losses.append(train_loss)
             self.val_losses.append(val_loss)
+            self.test_losses.append(test_loss)
+
+            self.train_probs_per_epoch.append(train_probs)
+            self.val_probs_per_epoch.append(val_probs)
+            self.test_probs_per_epoch.append(test_probs)
 
             if train_per_class_loss is not None:
                 self.train_losses_per_class.append(train_per_class_loss)
             if val_per_class_loss is not None:
                 self.val_losses_per_class.append(val_per_class_loss)
+            if test_per_class_loss is not None:
+                self.test_losses_per_class.append(test_per_class_loss)
 
-            print(f"Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+            lr = self.optimizer.param_groups[0]['lr']
+            print(f"Train Loss:\t{train_loss:.4f}\t(LR: {lr:.10f})")
+            print(f"Val Loss:\t{val_loss:.4f}")
+            print(f"Test Loss:\t{test_loss:.4f}")
             
             if eval_fn is not None:
                 # Speichere die Metriken für die Validierung
                 train_metrics = self.handle_metrics(train_labels, train_preds, 'Training', eval_fn)
                 val_metrics = self.handle_metrics(val_labels, val_preds, 'Validation', eval_fn)
+                test_metrics = self.handle_metrics(test_labels, test_preds, 'Test', eval_fn)
 
                 self.train_metrics_per_epoch.append(train_metrics)
                 self.val_metrics_per_epoch.append(val_metrics)
+                self.test_metrics_per_epoch.append(test_metrics)
 
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
 
+            # save learning rate
+            lr = self.optimizer.param_groups[0]['lr']
+            self.lrs.append(lr)
 
-    def training_loop(self, threshold):
+
+    def training_loop(self):
+        """
+        Loops over the training data for one epoch.
+        Returns:
+            epoch_loss: Average loss for the epoch
+            avg_per_class_loss: Average loss per class for the epoch
+            all_pred: All predictions for the epoch
+            all_probs: All probabilities for the epoch
+            all_y: All true labels for the epoch
+        """
         self.model.train()
         running_loss = 0.0
         all_y = []
         all_pred = []
+        all_probs = []
         per_class_losses = []
         progress_bar = tqdm(self.train_loader, desc="Training", leave=False)
 
         for X, y in progress_bar:
-            loss, preds, labels, outputs, targets = self.training_step(X, y, threshold)
+            loss, preds, labels, outputs, targets, probs = self.training_step(X, y)
             running_loss += loss * X.size(0)
             all_y.append(labels)
             all_pred.append(preds)
+            all_probs.append(probs.detach().cpu().numpy())
             per_class_losses.append(self.compute_per_class_loss(outputs, targets))
             progress_bar.set_postfix({"batch_loss": loss})
 
         epoch_loss = self.compute_epoch_loss(running_loss, len(self.train_loader.dataset))
         avg_per_class_loss = np.mean(per_class_losses, axis=0) if per_class_losses else None
-        
-        return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_y)
-    
 
-    def training_step(self, X, y, threshold):
+        return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_probs), np.concatenate(all_y)
+
+
+    def training_step(self, X, y):
+        """
+        Performs a single training step (forward + backward pass).
+        Args:
+            X: Input data
+            y: True labels
+        Returns:
+            loss: Loss value for the batch
+            predicted: Predicted labels for the batch
+            y: True labels for the batch
+            outputs: Raw model outputs (logits) for the batch
+            targets: True labels tensor for the batch
+            probs: Predicted probabilities for the batch
+        """
         X, y = X.to(self.device), y.to(self.device)
         self.optimizer.zero_grad()
         outputs = self.model(X)
         loss = self.criterion(outputs, y)
         loss.backward()
         self.optimizer.step()
-        probs = torch.sigmoid(outputs)
-        predicted = (probs >= threshold).int() if isinstance(threshold, (float, int)) else (probs >= torch.tensor(threshold, device=probs.device).view(1, -1)).int()
-        return loss.item(), predicted.detach().cpu().numpy(), y.detach().cpu().numpy(), outputs, y
+        predicted = outputs.argmax(dim=1)
+        probs = torch.softmax(outputs, dim=1)
+        return loss.item(), predicted.detach().cpu().numpy(), y.detach().cpu().numpy(), outputs, y, probs
 
 
-    def validation_loop(self, threshold):
+    def validation_loop(self):
+        """
+        Loops over the validation data for one epoch.
+        Returns:
+            epoch_loss: Average loss for the epoch
+            avg_per_class_loss: Average loss per class for the epoch
+            all_pred: All predictions for the epoch
+            all_probs: All probabilities for the epoch
+            all_y: All true labels for the epoch
+        """
         self.model.eval()
         running_loss = 0.0
         all_y = []
         all_pred = []
+        all_probs = []
         per_class_losses = []
         
         with torch.no_grad():
@@ -128,39 +190,129 @@ class ModelTrainer:
                 outputs = self.model(X)
                 loss = self.criterion(outputs, y).item()
                 running_loss += loss * X.size(0)
-
-                probs = torch.sigmoid(outputs)
-                predicted = (probs >= threshold).int() if isinstance(threshold, (float, int)) else (probs >= torch.tensor(threshold, device=probs.device).view(1, -1)).int()
-                
+                probs = torch.softmax(outputs, dim=1)
+                predicted = probs.argmax(dim=1)
                 all_y.append(y.detach().cpu().numpy())
                 all_pred.append(predicted.detach().cpu().numpy())
+                all_probs.append(probs.detach().cpu().numpy())
                 per_class_losses.append(self.compute_per_class_loss(outputs, y))
 
         epoch_loss = self.compute_epoch_loss(running_loss, len(self.val_loader.dataset))
         avg_per_class_loss = np.mean(per_class_losses, axis=0) if per_class_losses else None
         
-        return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_y)
+        return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_probs), np.concatenate(all_y)
+
+
+    def test_loop(self):
+        """
+        Loops over the test data for one epoch.
+        Returns:
+            epoch_loss: Average loss for the epoch
+            avg_per_class_loss: Average loss per class for the epoch
+            all_pred: All predictions for the epoch
+            all_probs: All probabilities for the epoch
+            all_y: All true labels for the epoch
+        """
+        self.model.eval()
+        running_loss = 0.0
+        all_y = []
+        all_pred = []
+        all_probs = []
+        per_class_losses = []
+        
+        with torch.no_grad():
+            for X, y in self.test_loader:
+                X, y = X.to(self.device), y.to(self.device)
+                outputs = self.model(X)
+                loss = self.criterion(outputs, y).item()
+                running_loss += loss * X.size(0)
+                probs = torch.softmax(outputs, dim=1)
+                predicted = probs.argmax(dim=1)
+                all_y.append(y.detach().cpu().numpy())
+                all_pred.append(predicted.detach().cpu().numpy())
+                all_probs.append(probs.detach().cpu().numpy())
+                per_class_losses.append(self.compute_per_class_loss(outputs, y))
+
+        epoch_loss = self.compute_epoch_loss(running_loss, len(self.test_loader.dataset))
+        avg_per_class_loss = np.mean(per_class_losses, axis=0) if per_class_losses else None
+        
+        return epoch_loss, avg_per_class_loss, np.concatenate(all_pred), np.concatenate(all_probs), np.concatenate(all_y)
 
 
     def compute_per_class_loss(self, outputs, targets):
-        bce = torch.nn.BCEWithLogitsLoss(reduction='none')
-        return bce(outputs, targets).mean(dim=0).detach().cpu().numpy()
+        """
+        Calculates the average loss per class for a batch.
+        Args:
+            outputs: Model outputs (logits) for the batch
+            targets: True labels tensor for the batch
+        Returns:
+            losses_per_class: Numpy array of average losses per class
+        """
+        # outputs: (batch, num_classes), targets: (batch,)
+        losses = torch.nn.functional.cross_entropy(outputs, targets, reduction='none')
+        # Berechne Mittelwert pro Klasse
+        num_classes = outputs.shape[1]
+        losses_per_class = []
+        for c in range(num_classes):
+            mask = (targets == c)
+            if mask.sum() > 0:
+                losses_per_class.append(losses[mask].mean().item())
+            else:
+                losses_per_class.append(0.0)
+        return np.array(losses_per_class)
 
 
     def compute_epoch_loss(self, running_loss, dataset_size):
+        """
+        Computes the average loss for an epoch.
+        Args:
+            running_loss: Cumulative loss for the epoch
+            dataset_size: Number of samples in the dataset
+        Returns:
+            Average loss for the epoch
+        """
         return running_loss / dataset_size
 
 
     def handle_metrics(self, y_true, y_pred, phase, eval_fn):
+        """
+        Calculates and prints metrics using the provided evaluation function.
+        Args:
+            y_true: True labels
+            y_pred: Predicted labels
+            phase: "Training", "Validation" or "Test"
+            eval_fn: Evaluation function that takes (y_true, y_pred) and returns a dict of metrics
+        Returns:
+            metrics: Dictionary of calculated metrics
+        """
         metrics = eval_fn(y_true, y_pred)
-        print(f"Metrics ({phase}): {metrics}")
+
+        def round_metrics(obj):
+            if isinstance(obj, float):
+                return round(obj, 4)
+            elif isinstance(obj, list):
+                return [round_metrics(x) for x in obj]
+            elif isinstance(obj, dict):
+                return {k: round_metrics(v) for k, v in obj.items()}
+            else:
+                return obj
+        metrics_rounded = round_metrics(metrics)
+
+        if phase == "Test":
+            print(f"Metrics ({phase}):\t\t{metrics_rounded}")  # doppelter Tab für Test
+        else:
+            print(f"Metrics ({phase}):\t{metrics_rounded}")    # einfacher Tab für die anderen
         return metrics
     
 
     def inferencing(self, data_loader):
         """
-        Führt einen vollständigen Inferenz-Durchlauf aus und gibt wahre Labels und 
-        Wahrscheinlichkeiten zurück.
+        Runs inference on the provided data loader.
+        Args:
+            data_loader: DataLoader for the dataset to run inference on
+        Returns:
+            all_y_true: All true labels
+            all_y_probs: All predicted probabilities
         """
         self.model.eval()
         all_y_true = []
@@ -170,8 +322,7 @@ class ModelTrainer:
             for X, y in data_loader:
                 X, y = X.to(self.device), y.to(self.device)
                 outputs = self.model(X)
-                probs = torch.sigmoid(outputs)
-                
+                probs = torch.softmax(outputs, dim=1)
                 all_y_true.append(y.cpu().numpy())
                 all_y_probs.append(probs.cpu().numpy())
                 
@@ -179,16 +330,14 @@ class ModelTrainer:
 
 
     @staticmethod
-    def create_weighted_criterion(y_train, class_names=None):
+    def create_weighted_criterion(y_train, weight_factor=1.0):
         """
-        Erstellt eine gewichtete BCEWithLogitsLoss basierend auf Klassenhäufigkeiten.
-        
+        Creates a weighted CrossEntropyLoss based on class frequencies in y_train.
         Args:
-            y_train: Training labels (np.ndarray)
-            class_names: Optional, Liste der Klassennamen für Debug-Output
-        
+            y_train: Array of training labels
+            weight_factor: Factor to adjust the strength of the weighting (1.0 = full weighting, 0.0 = no weighting)
         Returns:
-            nn.BCEWithLogitsLoss: Gewichtete Loss-Funktion
+            Weighted CrossEntropyLoss
         """
         # Klassen-Häufigkeiten berechnen
         if isinstance(y_train, np.ndarray) and y_train.ndim == 2:
@@ -199,52 +348,64 @@ class ModelTrainer:
         # Gewichte berechnen (inverse Häufigkeit + Normierung)
         class_weights = 1.0 / class_counts
         class_weights = class_weights / class_weights.sum() * len(class_counts)
+
+        # Gewichtung entschärfen:
+        class_weights = 1.0 + (class_weights - 1.0) * weight_factor
         class_weights = torch.tensor(class_weights, dtype=torch.float32)
-        
-        # Optional: Debug-Output
-        if class_names:
-            print("Class weights (higher values = rarer classes get more importance):")
-            for name, weight in zip(class_names, class_weights):
-                print(f"  {name}: {weight:.4f}")
-        
-        return nn.BCEWithLogitsLoss(pos_weight=class_weights)
+
+        return nn.CrossEntropyLoss(weight=class_weights)
 
 
 # ------------------------------ SAVING ------------------------------
     def save_training_history(self, class_names=None, history_path='data/results/training_history/training_history.csv'):
         """
-        Speichert die Trainings- und Validierungsverluste sowie alle Metriken
-        in einer CSV-Datei, inkl. pro-Klasse Loss für Training und Validation je Epoche.
-        Stellt sicher, dass das Zielverzeichnis existiert.
+        Saves the training history to a CSV file.
+        Args:
+            class_names: List of class names for per-class metrics
+            history_path: Path to save the CSV file
+        Returns:
+            None
         """
         history = {
             'epoch': list(range(1, len(self.train_losses) + 1)),
             'train_loss': self.train_losses,
-            'val_loss': self.val_losses
+            'val_loss': self.val_losses,
+            'test_loss': self.test_losses,
+            'learning_rate': self.lrs[:len(self.train_losses)]
         }
 
-        # Pro-Klasse Loss für Training und Validation
+        # ------------ Globale Metriken ------------
+        def add_global_metrics(metrics_per_epoch, prefix):
+            if metrics_per_epoch:
+                for metric in ['accuracy', 'f1_weighted', 'precision_weighted', 'recall_weighted']:
+                    history[f'{prefix}_{metric}'] = [m.get(metric) for m in metrics_per_epoch]
+        add_global_metrics(self.train_metrics_per_epoch, 'train')
+        add_global_metrics(self.val_metrics_per_epoch, 'val')
+        add_global_metrics(self.test_metrics_per_epoch, 'test')
+
+        # ------------ Pro-Klasse Metriken ------------
+        def add_per_class_metric(metrics_per_epoch, metric_key, prefix):
+            if metrics_per_epoch and class_names:
+                for i, cname in enumerate(class_names):
+                    history[f'{prefix}_{cname}'] = [m.get(metric_key)[i] if m.get(metric_key) is not None else None for m in metrics_per_epoch]
+        
+        for split, metrics_per_epoch in zip(
+            ['train', 'val', 'test'],
+            [self.train_metrics_per_epoch, self.val_metrics_per_epoch, self.test_metrics_per_epoch]
+        ):
+            add_per_class_metric(metrics_per_epoch, 'f1_per_class', f'{split}_f1')
+            add_per_class_metric(metrics_per_epoch, 'precision_per_class', f'{split}_precision')
+            add_per_class_metric(metrics_per_epoch, 'recall_per_class', f'{split}_recall')
+
+        # ------------ Pro-Klasse Loss ------------
         def add_per_class_losses(losses_per_class, prefix):
             if losses_per_class:
                 arr = np.array(losses_per_class)
                 for cname, col in zip(class_names, arr.T):
                     history[f'{prefix}_{cname}'] = col.tolist()
-
         add_per_class_losses(self.train_losses_per_class, 'train_loss')
         add_per_class_losses(self.val_losses_per_class, 'val_loss')
-
-        # Globale und pro-Klasse Metriken
-        if self.val_metrics_per_epoch:
-            for metric in ['accuracy', 'f1_weighted', 'precision_weighted', 'recall_weighted']:
-                history[f'val_{metric}'] = [m.get(metric) for m in self.val_metrics_per_epoch]
-
-            def add_per_class_metric(metric_key, prefix):
-                for i, cname in enumerate(class_names):
-                    history[f'{prefix}_{cname}'] = [m.get(metric_key)[i] for m in self.val_metrics_per_epoch]
-
-            add_per_class_metric('f1_per_class', 'val_f1')
-            add_per_class_metric('precision_per_class', 'val_precision')
-            add_per_class_metric('recall_per_class', 'val_recall')
+        add_per_class_losses(self.test_losses_per_class, 'test_loss')
 
         df = pd.DataFrame(history)
 
@@ -270,10 +431,12 @@ class ModelTrainer:
 
     def save_checkpoint(self, epoch, path):
         """
-        Speichert den Modell-, Optimierer- und ggf. Scheduler-Zustand für die Fortsetzung des Trainings.
+        Saves a checkpoint with model, optimizer, and scheduler states.
         Args:
-            epoch: Die aktuelle Epoche, bis zu der das Training fortgesetzt werden soll
-            path: Der Pfad, unter dem der Checkpoint gespeichert werden soll
+            epoch: Current epoch number
+            path: Path to save the checkpoint
+        Returns:
+            None
         """
         checkpoint = {
             'epoch': epoch,
@@ -309,8 +472,12 @@ class ModelTrainer:
 
     def load_training_history(self, class_names=None, history_path='data/results/training_history/training_history.csv'):
         """
-        Lädt die Trainingshistorie aus einer CSV-Datei und speichert sie in 
-        den Instanzvariablen des Trainers. Fehlende Metrik-Spalten werden ignoriert.
+        Loads the training history from a CSV file.
+        Args:
+            class_names: List of class names for per-class metrics
+            history_path: Path to the CSV file
+        Returns:
+            None
         """
         try:
             df = pd.read_csv(history_path)
@@ -330,7 +497,7 @@ class ModelTrainer:
                 metrics_dict['precision_per_class'] = [row.get(f'val_precision_{cname}') if f'val_precision_{cname}' in row else None for cname in class_names]
                 metrics_dict['recall_per_class'] = [row.get(f'val_recall_{cname}') if f'val_recall_{cname}' in row else None for cname in class_names]
                 self.val_metrics_per_epoch.append(metrics_dict)
-            print(f"Trainingshistorie aus '{history_path}' erfolgreich geladen.")
+            print(f"Trainingshistorie erfolgreich aus '{history_path}' geladen.")
             
         except FileNotFoundError:
             print(f"Fehler: Datei '{history_path}' nicht gefunden.")
@@ -339,7 +506,13 @@ class ModelTrainer:
 
         
     def load_checkpoint(self, path):
-        """Lädt den Modell-, Optimierer- und ggf. Scheduler-Zustand, um das Training fortzusetzen."""
+        """
+        Loads a checkpoint and restores model, optimizer, and scheduler states.
+        Args:
+            path: Path to the checkpoint file
+        Returns:
+            start_epoch: Epoch to resume training from
+        """
         try:
             checkpoint = torch.load(path, map_location=self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])

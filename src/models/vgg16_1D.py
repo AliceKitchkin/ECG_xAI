@@ -4,7 +4,14 @@ import torch.nn as nn
 
 # ---------------------------- CLASS ----------------------------
 class VGG16_1D(nn.Module):
-	def __init__(self, in_channels=12, num_classes=2, input_length=1000):
+	def __init__(self, in_channels=12, num_classes=2, input_length=70):
+		"""
+		1D VGG16 model adapted for time series data. Shape of input data should be (batch_size, in_channels, input_length). 
+		Args:
+			in_channels (int): Number of input channels (e.g., 12 for 12-lead ECG).
+			num_classes (int): Number of output classes.
+			input_length (int): Length of the input time series.
+		"""
 		super(VGG16_1D, self).__init__()
 
 		self.features = nn.Sequential(
@@ -51,16 +58,16 @@ class VGG16_1D(nn.Module):
 			nn.MaxPool1d(kernel_size=2, stride=2),
 
 			# Block 5
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
-			nn.BatchNorm1d(512),
-			nn.ReLU(inplace=True),
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
-			nn.BatchNorm1d(512),
-			nn.ReLU(inplace=True),
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
-			nn.BatchNorm1d(512),
-			nn.ReLU(inplace=True),
-			nn.MaxPool1d(kernel_size=2, stride=2),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.BatchNorm1d(512),
+			# nn.ReLU(inplace=True),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.BatchNorm1d(512),
+			# nn.ReLU(inplace=True),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.BatchNorm1d(512),
+			# nn.ReLU(inplace=True),
+			# nn.MaxPool1d(kernel_size=2, stride=2),
 		)
 
 		# Dynamisch berechnen, wie viele Features nach den Convs übrig sind
@@ -70,13 +77,13 @@ class VGG16_1D(nn.Module):
 			self.flattened_size = features_out.shape[1] * features_out.shape[2]
 
 		self.classifier = nn.Sequential(
-			nn.Linear(self.flattened_size, 4096),
+			nn.Linear(self.flattened_size, 256),
 			nn.ReLU(True),
-			nn.Dropout(),
-			nn.Linear(4096, 4096),
+			nn.Dropout(p=0.5), 
+			nn.Linear(256, 256),
 			nn.ReLU(True),
-			nn.Dropout(),
-			nn.Linear(4096, num_classes),
+			nn.Dropout(p=0.5),
+			nn.Linear(256, num_classes),
 		)
 
 	def forward(self, x):
@@ -85,5 +92,3 @@ class VGG16_1D(nn.Module):
 		x = self.classifier(x)
 		return x
 
-# Beispiel für die Initialisierung:
-# model = VGG16_1D(in_channels=12, num_classes=5, input_length=1000)

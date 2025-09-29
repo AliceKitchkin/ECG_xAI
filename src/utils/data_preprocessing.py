@@ -16,7 +16,6 @@ class DataPreprocessor:
     def data_split(self, X_signals, y_labels, meta_df):
         """
         Split data into train, validation, and test sets using meta_df.strat_fold.
-        Converts one-hot labels to class indices if needed.
         Args:
             X_signals: Input signals.
             y_labels: Corresponding labels.
@@ -30,11 +29,6 @@ class DataPreprocessor:
         y_val = y_labels[meta_df.strat_fold == 9]
         X_test = X_signals[meta_df.strat_fold == 10]
         y_test = y_labels[meta_df.strat_fold == 10]
-
-        # Ensure labels are class indices, not one-hot
-        y_train = self._ensure_class_indices(y_train)
-        y_val = self._ensure_class_indices(y_val)
-        y_test = self._ensure_class_indices(y_test)
 
         return X_train, y_train, X_val, y_val, X_test, y_test
 
@@ -50,7 +44,7 @@ class DataPreprocessor:
         self.save_scaler(outputfolder)
 
         X_train_std = self._apply_standardizer(X_train)
-        X_val_std = self._apply_standardizer(X_val)
+        X_val_std = self._apply_standardizer(X_validation)
         X_test_std = self._apply_standardizer(X_test)
 
         return np.array(X_train_std), np.array(X_val_std), np.array(X_test_std)
@@ -63,31 +57,22 @@ class DataPreprocessor:
         self.save_processed_data(X_train, y_train, outputfolder, 'train')
         self.save_processed_data(X_val, y_val, outputfolder, 'val')
         self.save_processed_data(X_test, y_test, outputfolder, 'test')
-
-
-    @staticmethod
-    def _ensure_class_indices(y):
-        return np.argmax(y, axis=1) if y.ndim > 1 else y
     
 
     @staticmethod
     def relabel_to_mi_norm(y, mlb):
         """
         Wandelt die Labels so um, dass nur noch MI und NORM existieren.
-        Args:
-            y: np.ndarray, shape (n_samples, n_classes), multi-hot
-            mlb: MultiLabelBinarizer
-        Returns:
-            np.ndarray, shape (n_samples, 2)
+        Gibt Integer-Labels zurück: 0=MI, 1=NORM
         """
         mi_idx = mlb.classes_.tolist().index('MI') if 'MI' in mlb.classes_ else None
         norm_idx = mlb.classes_.tolist().index('NORM') if 'NORM' in mlb.classes_ else None
         new_y = []
         for row in y:
             if mi_idx is not None and row[mi_idx] == 1:
-                new_y.append([1, 0])  # MI
+                new_y.append(0)  # MI
             elif norm_idx is not None and row[norm_idx] == 1:
-                new_y.append([0, 1])  # NORM
+                new_y.append(1)  # NORM
             # else: ignore
         return np.array(new_y)
 
@@ -125,16 +110,12 @@ class DataPreprocessor:
 
 
     @staticmethod
-    def load_processed_data(out_dir, prefix, class_names=None):
+    def load_processed_data(out_dir, prefix):
         """
         Lädt die gespeicherten Daten und Labels als .npy-Dateien aus dem angegebenen Verzeichnis.
-        Optional: Wandelt eindimensionale Labels in One-Hot-Labels um, wenn class_names übergeben wird.
         """
         print(f'Loading processed data from {out_dir} with prefix {prefix}')
         X = np.load(os.path.join(out_dir, f'{prefix}_signals.npy'))
         y = np.load(os.path.join(out_dir, f'{prefix}_labels.npy'))
         
-        if class_names is not None:
-            if y.ndim == 1:
-                y = np.eye(len(class_names))[y]
         return X, y
