@@ -431,7 +431,7 @@ class ModelTrainer:
                 metrics_dict['precision_per_class'] = [row.get(f'val_precision_{cname}') if f'val_precision_{cname}' in row else None for cname in class_names]
                 metrics_dict['recall_per_class'] = [row.get(f'val_recall_{cname}') if f'val_recall_{cname}' in row else None for cname in class_names]
                 self.val_metrics_per_epoch.append(metrics_dict)
-            print(f"Trainingshistorie aus '{history_path}' erfolgreich geladen.")
+            print(f"Trainingshistorie erfolgreich aus '{history_path}' geladen.")
             
         except FileNotFoundError:
             print(f"Fehler: Datei '{history_path}' nicht gefunden.")
