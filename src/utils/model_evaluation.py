@@ -15,10 +15,10 @@ class ModelEvaluation:
         metrics = {
             'accuracy': accuracy_score(y_true, y_pred),
             'f1_weighted': f1_score(y_true, y_pred, average='weighted', zero_division=0),
-            'precision_weighted': precision_score(y_true, y_pred, average='weighted', zero_division=0),
-            'recall_weighted': recall_score(y_true, y_pred, average='weighted', zero_division=0),
             'f1_per_class': f1_score(y_true, y_pred, average=None, zero_division=0).tolist(),
+            'precision_weighted': precision_score(y_true, y_pred, average='weighted', zero_division=0),
             'precision_per_class': precision_score(y_true, y_pred, average=None, zero_division=0).tolist(),
+            'recall_weighted': recall_score(y_true, y_pred, average='weighted', zero_division=0),
             'recall_per_class': recall_score(y_true, y_pred, average=None, zero_division=0).tolist(),
         }
         return metrics
@@ -55,8 +55,6 @@ class ModelEvaluation:
                          class_names=None, figsize=(10, 6), history_path=None, show_per_class=True):
         """
         Plottet Loss-Kurven für Gesamt- und pro-Klasse-Loss für Train, Val und Test.
-        Optional kann ein Pfad zu einer Trainings-History-CSV übergeben werden.
-        show_per_class: Wenn True, werden pro-Klasse-Losses geplottet.
         """
         plt.figure(figsize=figsize)
 
@@ -152,7 +150,6 @@ class ModelEvaluation:
     def plot_metrics_from_history(history_path, metrics=None, figsize=(10, 6)):
         """
         Plottet beliebige Metriken aus einer Trainings-History-CSV.
-        metrics: Liste von Metrik-Namen (z.B. ['val_f1_weighted', 'val_precision_weighted', 'val_recall_weighted', 'train_loss_MI', 'val_loss_MI'])
         """
         if not os.path.exists(history_path):
             raise FileNotFoundError(f"History file not found: {history_path}")
@@ -183,6 +180,9 @@ class ModelEvaluation:
 
     @staticmethod
     def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=(7,6), dataset='val'):
+        """
+        Plottet die Konfusionsmatrix.
+        """
         cm = confusion_matrix(y_true, y_pred, normalize='true' if normalize else None)
         plt.figure(figsize=figsize)
         im = plt.imshow(cm, cmap='Blues')
