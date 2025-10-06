@@ -15,59 +15,66 @@ class VGG16_1D(nn.Module):
 		super(VGG16_1D, self).__init__()
 
 		self.features = nn.Sequential(
-			# Block 1
-			nn.Conv1d(in_channels, 64, kernel_size=3, padding=1),
+			# Block 1												# → Input: [Batch, 12, 70]
+			nn.Conv1d(in_channels, 64, kernel_size=3, padding=1), 	# Length 70 -> 70
 			nn.BatchNorm1d(64),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(64, 64, kernel_size=3, padding=1),
+			nn.Conv1d(64, 64, kernel_size=3, padding=1),			# Length 70 -> 70
 			nn.BatchNorm1d(64),
 			nn.ReLU(inplace=True),
-			nn.MaxPool1d(kernel_size=2, stride=2),
+			nn.MaxPool1d(kernel_size=2, stride=2),					# Length 70 -> 35
+																	# → Output: [Batch, 64, 35]
 
 			# Block 2
-			nn.Conv1d(64, 128, kernel_size=3, padding=1),
+			nn.Conv1d(64, 128, kernel_size=3, padding=1),			# Length 35 -> 35
 			nn.BatchNorm1d(128),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(128, 128, kernel_size=3, padding=1),
+			nn.Conv1d(128, 128, kernel_size=3, padding=1), 			# Length 35 -> 35
 			nn.BatchNorm1d(128),
 			nn.ReLU(inplace=True),
-			nn.MaxPool1d(kernel_size=2, stride=2),
+			nn.MaxPool1d(kernel_size=2, stride=2), 					# Length 35 -> 17
+																	# → Output: [Batch, 128, 17]
 
 			# Block 3
-			nn.Conv1d(128, 256, kernel_size=3, padding=1),
+			nn.Conv1d(128, 256, kernel_size=3, padding=1),			# Length 17 -> 17
 			nn.BatchNorm1d(256),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(256, 256, kernel_size=3, padding=1),
+			nn.Conv1d(256, 256, kernel_size=3, padding=1), 			# Length 17 -> 17
 			nn.BatchNorm1d(256),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(256, 256, kernel_size=3, padding=1),
+			nn.Conv1d(256, 256, kernel_size=3, padding=1), 			# Length 17 -> 17
 			nn.BatchNorm1d(256),
 			nn.ReLU(inplace=True),
-			nn.MaxPool1d(kernel_size=2, stride=2),
+			nn.MaxPool1d(kernel_size=2, stride=2), 					# Length 17 -> 8
+																	# → Output: [Batch, 256, 8]
 
 			# Block 4
-			nn.Conv1d(256, 512, kernel_size=3, padding=1),
+			nn.Conv1d(256, 512, kernel_size=3, padding=1),			# Length 8 -> 8
 			nn.BatchNorm1d(512),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			nn.Conv1d(512, 512, kernel_size=3, padding=1),			# Length 8 -> 8
 			nn.BatchNorm1d(512),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			nn.Conv1d(512, 512, kernel_size=3, padding=1), 			# Length 8 -> 8
 			nn.BatchNorm1d(512),
 			nn.ReLU(inplace=True),
-			nn.MaxPool1d(kernel_size=2, stride=2),
+			nn.MaxPool1d(kernel_size=2, stride=2), 					# Length 8 -> 4
+																	# → Output: [Batch, 512, 4]
+																	# → Flatten Size: 512*4 = 2048
 
 			# Block 5
-			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
 			# nn.BatchNorm1d(512),
 			# nn.ReLU(inplace=True),
-			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
 			# nn.BatchNorm1d(512),
 			# nn.ReLU(inplace=True),
-			# nn.Conv1d(512, 512, kernel_size=3, padding=1),
+			# nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
 			# nn.BatchNorm1d(512),
 			# nn.ReLU(inplace=True),
-			# nn.MaxPool1d(kernel_size=2, stride=2),
+			# nn.MaxPool1d(kernel_size=2, stride=2), 				# Length 4 -> 2
+			 														# → Output: [Batch, 512, 2]
+			 														# → Flatten Size: 512*2 = 1024
 		)
 
 		# Dynamisch berechnen, wie viele Features nach den Convs übrig sind
