@@ -90,7 +90,8 @@ class VGG16_1D(nn.Module):
 			nn.Linear(256, 256),
 			nn.ReLU(True),
 			nn.Dropout(p=0.5),
-			nn.Linear(256, num_classes),
+			nn.Linear(256, num_classes)
+			# nn.Softmax(dim=1) # Softmax wird in CrossEntropyLoss integriert, daher hier nicht notwendig
 		)
 
 	def forward(self, x):
