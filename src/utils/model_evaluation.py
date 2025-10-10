@@ -96,7 +96,7 @@ class ModelEvaluation:
         if train_losses is not None:
             plt.plot(train_losses, label='Train Loss', color='orange', linewidth=2)
         if val_losses is not None:
-            plt.plot(val_losses, label='Val Loss', color='lightblue', linewidth=2)
+            plt.plot(val_losses, label='Val Loss', color='blue', linewidth=2)
         if test_losses is not None:
             plt.plot(test_losses, label='Test Loss', color='green', linewidth=2)
 
@@ -115,17 +115,17 @@ class ModelEvaluation:
                 if train_losses_per_class is not None:
                     train_losses_per_class = np.array(train_losses_per_class)
                     for i in range(n_classes):
-                        plt.plot(train_losses_per_class[:, i], '--', color=colors[i % len(colors)], label=f'Train {names[i]}')
+                        plt.plot(train_losses_per_class[:, i], ':', color=colors[i % len(colors)], label=f'Train {names[i]}', linewidth=1, alpha=0.7)
 
                 if val_losses_per_class is not None:
                     val_losses_per_class = np.array(val_losses_per_class)
                     for i in range(n_classes):
-                        plt.plot(val_losses_per_class[:, i], ':', color=colors[i % len(colors)], label=f'Val {names[i]}')
+                        plt.plot(val_losses_per_class[:, i], ':', color=colors[i % len(colors)], label=f'Val {names[i]}', linewidth=1, alpha=0.7)
 
                 if test_losses_per_class is not None:
                     test_losses_per_class = np.array(test_losses_per_class)
                     for i in range(n_classes):
-                        plt.plot(test_losses_per_class[:, i], '-.', color=colors[i % len(colors)], label=f'Test {names[i]}')
+                        plt.plot(test_losses_per_class[:, i], ':', color=colors[i % len(colors)], label=f'Test {names[i]}', linewidth=1, alpha=0.7)
 
         if train_losses is not None:
             n_epochs = len(train_losses)
