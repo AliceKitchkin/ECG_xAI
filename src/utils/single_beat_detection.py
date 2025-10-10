@@ -7,6 +7,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from collections import defaultdict
 
 
 class SingleBeatsDetector:
@@ -38,8 +39,9 @@ class SingleBeatsDetector:
             np.random.seed(42 + signal_idx)
             info = {}
             info["signal_idx"] = signal_idx
-            info["label_idx"] = int(np.argmax(y_relabel[signal_idx]))
+            info["label_idx"] = int(y_relabel[signal_idx])
             info["label_name"] = CLASS_NAMES[info["label_idx"]]
+
             lead_from_signal = signal[:, lead_for_rpeak_detection]
             signals_processed, rpeak_info = nk.ecg_process(
                 lead_from_signal, sampling_rate=sampling_rate, method=method
@@ -58,49 +60,82 @@ class SingleBeatsDetector:
             return signal_idx, None, np.array([]), None
         
     @staticmethod
-    def clean_and_extract_rpeaks_sequential(ecg_signal, y_relabel, class_names, sampling_rate, method, lead_for_rpeak_detection):
+    def clean_and_extract_rpeaks_sequential(ecg_signal, y_relabel, class_names, sampling_rate, method, leads_to_try_for_rpeaks=[10,11,1], handling=False):
         """
-        Sequentielle Version für deterministische Ergebnisse (kein Threading).
+        Cleaning and R-peak detection for ECG signals.
+
+        Args:
+            ecg_signal: List of ECG signals (NumPy Arrays)
+            y_relabel: One-hot encoded labels
+            class_names: List of class names
+            sampling_rate: Sampling rate of ECG signals
+            method: Method for R-peak detection and cleaning
+            leads_to_try_for_rpeaks: List of lead indices to try for R-peak detection
+        Returns:
+            all_cleaned_signals: List of cleaned ECG signals (NumPy Arrays)
+            all_rpeaks: List of R-peak arrays  
+            detection_info: List of detection info dictionaries
         """
         n_signals = len(ecg_signal)
         all_cleaned_signals = []
         all_rpeaks = []
         detection_info = []
-        from tqdm import tqdm
+
         for signal_idx in tqdm(range(n_signals), desc="Processing ECG signals"):
+
+            np.random.seed(42 + signal_idx)
+            info = {}
+            info["signal_idx"] = signal_idx
+            info["label_idx"] = int(y_relabel[signal_idx])
+            info["label_name"] = class_names[info["label_idx"]]
+            signal = ecg_signal[signal_idx]
+
+            # ----- R-Peak Detection with one signal lead -----
+            rpeak_success = False
+            for lead_try in leads_to_try_for_rpeaks:
+                try:    
+                    lead_from_signal = signal[:, lead_try]
+                    one_signal_processed, rpeak_info = nk.ecg_process(
+                        lead_from_signal, sampling_rate=sampling_rate, method=method
+                    )
+                    rpeaks = rpeak_info["ECG_R_Peaks"]
+                    for k, v in rpeak_info.items():
+                        info[k] = v
+                    info['leads_for_rpeak_detection'] = lead_try
+                    rpeak_success = True
+                    break  # Erfolg, Schleife verlassen
+                except Exception as e:
+                    print(f"Error in R-peak detection for signal {signal_idx} with lead {lead_try}: {e}")
+                    continue
+
+            if not rpeak_success:
+                all_cleaned_signals.append(None)
+                all_rpeaks.append(np.array([]))
+                detection_info.append(None)
+                continue # signal will be skipped
+                
+            # ----- Clean all 12 leads -----
             try:
-                np.random.seed(42 + signal_idx)
-                info = {}
-                info["signal_idx"] = signal_idx
-                info["label_idx"] = int(np.argmax(y_relabel[signal_idx]))
-                info["label_name"] = class_names[info["label_idx"]]
-                signal = ecg_signal[signal_idx]
-                lead_from_signal = signal[:, lead_for_rpeak_detection]
-                signals_processed, rpeak_info = nk.ecg_process(
-                    lead_from_signal, sampling_rate=sampling_rate, method=method
-                )
-                rpeaks = rpeak_info["ECG_R_Peaks"]
-                for k, v in rpeak_info.items():
-                    info[k] = v
-                n_leads = signal.shape[1]
-                cleaned_leads = np.zeros_like(signal)
-                for lead_idx in range(n_leads):
+                cleaned_leads = np.zeros_like(signal) # for initialization
+                for lead_idx in range(12): # 12 leads
                     lead_data = signal[:, lead_idx]
                     cleaned_signal = nk.ecg_clean(lead_data, sampling_rate=sampling_rate, method=method)
                     cleaned_leads[:, lead_idx] = cleaned_signal
+                # Store results
                 all_cleaned_signals.append(cleaned_leads)
                 all_rpeaks.append(rpeaks)
                 detection_info.append(info)
             except Exception as e:
-                print(f"Error processing signal {signal_idx}: {e}")
+                print(f"Error in cleaning for signal {signal_idx}: {e}")
                 all_cleaned_signals.append(None)
                 all_rpeaks.append(np.array([]))
                 detection_info.append(None)
+
         return all_cleaned_signals, all_rpeaks, detection_info
 
     @staticmethod
     def save_clean_signals_and_rpeaks(all_cleaned_signals, all_rpeaks, detection_info,
-                                output_dir, sampling_rate=100, method='pantompkins1985'):
+                                      output_dir, sampling_rate=100, method='neurokit'):
         """
         Speichert R-Peak Detection Ergebnisse als Dateien.
         
@@ -222,103 +257,246 @@ class SingleBeatsDetector:
         
         return all_cleaned_signals, all_rpeaks, detection_info, metadata
 
-    # PLOTTING
-    @staticmethod
-    def plot_one_signal_with_rpeaks(signal_id, cleaned_signals, rpeaks, lead_names, label, figsize=(15, 20)):
-        """
-        Plottet ein einzelnes Signal mit allen 12 Ableitungen und R-Peaks.
-        
-        Args:
-            signal_id: Index des zu plottenden Signals
-            cleaned_signals: Liste aller bereinigten Signale
-            rpeaks: Liste aller R-Peak Arrays
-            lead_names: Namen der 12 Ableitungen
-            figsize: Größe der Figur
-        """
-        
-        # Hole Signal und R-Peaks
-        cleaned_signal = cleaned_signals[signal_id]
-        rpeaks = rpeaks[signal_id]
-        
-        if cleaned_signal is None:
-            print(f"Signal {signal_id} ist None - Skip")
-            return
-        
-        # WICHTIG: Konvertiere zu NumPy Array falls es eine Liste ist
-        if isinstance(cleaned_signal, list):
-            try:
-                cleaned_signal = np.array(cleaned_signal)
-            except Exception as e:
-                print(f"Error converting signal {signal_id} to array for plotting: {e}")
-                return
-        
-        # Prüfe ob Signal die richtige Form hat
-        if cleaned_signal.ndim != 2 or cleaned_signal.shape[1] != 12:
-            print(f"Signal {signal_id} has wrong shape for plotting: {cleaned_signal.shape}, expected (n_samples, 12)")
-            return
-        
-        # Erstelle Figure mit 12 Subplots
-        fig, axes = plt.subplots(12, 1, figsize=figsize)
-        fig.suptitle(f'R-Peaks from Lead II applied to all 12 ECG Leads (Signal ID: {signal_id}, Label: {label})', fontsize=14)
-        
-        # Plotte alle 12 Ableitungen
-        for lead_idx in range(12):
-            lead_data = cleaned_signal[:, lead_idx]
-            
-            # Plotte bereinigte Signale
-            axes[lead_idx].plot(lead_data, color='blue', alpha=0.7, linewidth=1)
-            
-            # Markiere R-Peaks
-            if len(rpeaks) > 0:
-                axes[lead_idx].scatter(rpeaks, lead_data[rpeaks], color='red', s=50, marker='o', zorder=5)
-            
-            # Titel und Labels
-            axes[lead_idx].set_title(f'Lead {lead_names[lead_idx]} - R-peaks from Lead II (Cleaned)')
-            axes[lead_idx].set_ylabel('Amplitude')
-            axes[lead_idx].grid(True, alpha=0.3)
-            
-            # X-Achse nur beim letzten Plot
-            if lead_idx == 11:
-                axes[lead_idx].set_xlabel('Samples')
-        
-        plt.tight_layout(rect=[0, 0.03, 1, 0.98])
-        plt.show()
 
+    # ---------------- EDGE CASE HANDLING ----------------
     @staticmethod
-    # EDGE CASE HANDLING
-    def filter_signals_by_failed_rpeaks(all_cleaned_signals, all_rpeaks):
+    def print_failed_rpeaks_overview(signals, rpeaks, detection_info, threshold=0.1):
         """
-        Filtert Signal-IDs, deren R-Peak-Werte < 0 in der 2. Ableitung (Lead II) sind.
-        
+        Gibt eine Übersicht über fehlerhafte R-Peaks (z.B. Amplitude < threshold) aus.
         """
-        signals_none = []
+        signalids_none = []
         rpeaks_none = []
-        rpeaks_failed = []
-
-        for idx, (signal, rpeaks) in enumerate(zip(all_cleaned_signals, all_rpeaks)):
-
-            # 1. Prüfe auf None
+        failed_rpeaks = []
+        failed_norm = []
+        failed_mi = []
+        n_failed_total = 0
+        n_failed_norm_total = 0
+        n_failed_mi_total = 0
+        
+        # Loop through signals and rpeaks
+        for idx, (signal, rpeaks_arr, info) in enumerate(zip(signals, rpeaks, detection_info)):
             if signal is None:
-                signals_none.append(idx)
+                signalids_none.append(idx)
                 continue
-            if rpeaks is None or len(rpeaks) == 0:
+            if rpeaks_arr is None or len(rpeaks_arr) == 0:
                 rpeaks_none.append(idx)
                 continue
 
-            # 2. Prüfe ob Signal die richtige Form hat
-            if signal.shape[1] < 2:
-                print(f"Warning: Signal {idx} does not have Lead II (index 1). Skipping.")
-                continue
+            # determine which lead was used for R-Peak Detection
+            leads_used = info.get('leads_for_rpeak_detection') or info.get('used_leads')
+            if leads_used is None:
+                leads_used = [1]  # fallback to Lead II
+            elif isinstance(leads_used, int):
+                leads_used = [leads_used]
+        
+            # Check if at least one rpeak-amplitude is below threshold
+            failed_mask = SingleBeatsDetector.identify_failed_rpeaks(signal, rpeaks_arr, leads_used, threshold)
+
+            # Count failed rpeaks
+            n_failed = np.sum(failed_mask)
+            n_failed_total += n_failed
             
-            # 3. Extrahiere Lead II und V5
-            lead_ii = signal[:, 1]
-            lead_v5 = signal[:, 10]
+            if n_failed > 0:
+                failed_rpeaks.append(idx)
+                if info is not None:
+                    label = info.get('label_name', 'UNKOWN')
+                    if label == 'NORM':
+                        failed_norm.append(idx)
+                        n_failed_norm_total += n_failed
+                    elif label == 'MI':
+                        failed_mi.append(idx)
+                        n_failed_mi_total += n_failed
 
-            # 4. Prüfe ob mindestens ein R-Peak im Lead II und V5 < 0.1 liegt
-            if np.any( (lead_ii[rpeaks] < 0.1) & (lead_v5[rpeaks] < 0.1) ):
-                rpeaks_failed.append(idx)
+        # Calculate statistics
+        nr_signals = len(signals)
+        nr_rpeaks = sum(len(rp) for rp, sig in zip(rpeaks, signals) if sig is not None and hasattr(rp, '__len__'))
+        nr_failed_rpeaks = len(failed_rpeaks)
+        nr_valid_rpeaks = nr_rpeaks - n_failed_total
 
-        return signals_none, rpeaks_none, rpeaks_failed
+        print(f"> Signals None: {len(signalids_none)}")
+        print(f"> ID Examples: {signalids_none[:10]}\n")
+
+        print(f"> Signals with R-Peaks None: {len(rpeaks_none)}")
+        print(f"> ID Examples: {rpeaks_none[:10]}\n")
+
+        print(f"Found R-Peaks: {nr_rpeaks} (100%)")
+        avg_rpeaks = nr_rpeaks / nr_signals if nr_signals > 0 else 0
+        print(f"Avg R-Peaks per Signal: {avg_rpeaks:.2f}\n")
+
+        print(f"> Signals with at least one failed R-Peaks: {nr_failed_rpeaks}")
+        print(f"> ID Examples: {failed_rpeaks[:10]}\n")
+
+        valid_rpeaks_perc = nr_valid_rpeaks / nr_rpeaks * 100 if nr_rpeaks > 0 else 0
+        print(f"> Valid R-Peaks: {nr_valid_rpeaks} ({valid_rpeaks_perc:.2f}%)")
+
+        failed_rpeak_perc = n_failed_total / nr_rpeaks * 100 if nr_rpeaks > 0 else 0
+        print(f"> Failed R-Peaks: {n_failed_total} ({failed_rpeak_perc:.2f}%)")
+
+        norm_failed_perc = n_failed_norm_total / n_failed_total * 100 if n_failed_total > 0 else 0
+        print(f"\t> In NORM:: {n_failed_norm_total} ({norm_failed_perc:.2f}%)")
+        print(f"\t> ID Examples: {failed_norm[:10]}")
+
+        mi_failed_perc = n_failed_mi_total / n_failed_total * 100 if n_failed_total > 0 else 0
+        print(f"\t> In MI:: {n_failed_mi_total} ({mi_failed_perc:.2f}%)")
+        print(f"\t> ID Examples: {failed_mi[:10]}")
+
+    @staticmethod
+    def detect_rpeaks(signal, lead_idx, sampling_rate=100, method="neurokit"):
+        """Detect R-peaks on a specific lead."""
+        lead = signal[:, lead_idx]
+        _, rpeak_info = nk.ecg_process(lead, sampling_rate=sampling_rate, method=method)
+        return rpeak_info["ECG_R_Peaks"]
+    
+    @staticmethod
+    def identify_failed_rpeaks(signal, rpeaks, leads_used, threshold=0.1):
+        """
+        Identifies failed R-peaks in a multi-lead ECG signal based on amplitude thresholding.
+
+        For each used lead, the function checks if all R-peak amplitudes in that lead are below the given threshold.
+
+        - If all R-peak amplitudes in a lead are below the threshold, this lead is ignored and no R-peak is marked as
+        failed due to this lead. This is done because, for example, in myocardial infarction (MI), it is possible that
+        all R-peaks are truly below 0.1; in such cases, this is likely correct and not a detection error. Only outliers—i.e.,
+        individual R-peaks below the threshold—are likely to be true failures.
+        - Otherwise, only those R-peaks in this lead with amplitudes below the threshold are marked as failed.
+
+        A logical OR is applied across all non-ignored leads: an R-peak is considered failed if it is below the threshold
+        in at least one non-ignored lead.
+
+        Args:
+            signal (np.ndarray): The ECG signal array of shape (n_samples, n_leads).
+            rpeaks (array-like): Indices of detected R-peaks.
+            leads_used (list or int): Indices of leads used for evaluation.
+            threshold (float): Amplitude threshold for failure.
+
+        Returns:
+            np.ndarray: Boolean mask of shape (len(rpeaks),), where True indicates a failed R-peak.
+        """
+        if signal is None or len(rpeaks) == 0 or leads_used is None:
+            return np.array([], dtype=bool)
+        
+        if isinstance(leads_used, int):
+            leads_used = [leads_used]
+
+        amplitudes = np.stack([signal[rpeaks, lead] for lead in leads_used], axis=1)  # shape: (n_rpeaks, n_leads)
+        failed_mask = np.zeros(len(rpeaks), dtype=bool)
+
+        for i, lead in enumerate(leads_used):
+            lead_amps = amplitudes[:, i]
+            # Prüfe, ob ALLE R-Peaks in dieser Ableitung unter threshold sind
+            if np.all(lead_amps < threshold):
+                continue  # Ignoriere diese Ableitung komplett
+            # Markiere R-Peaks, die in dieser Ableitung unter threshold sind
+            failed_mask = failed_mask | (lead_amps < threshold)
+        return failed_mask
+    
+    @staticmethod
+    def choose_best_rpeaks(signal, rpeaks_candidates, lead_indices, threshold=0.1):
+        best_idx = None
+        best_score = None
+        for i, (rpeaks, lead_idx) in enumerate(zip(rpeaks_candidates, lead_indices)):
+            if len(rpeaks) == 0:
+                continue
+            amps = signal[rpeaks, lead_idx]
+            n_bad = np.sum(amps < threshold)
+            mean_amp = np.mean(amps)
+            score = (n_bad, -mean_amp)  # Erst n_bad minimieren, dann mean_amp maximieren
+            if best_score is None or score < best_score:
+                best_score = score
+                best_idx = i
+        if best_idx is not None:
+            return rpeaks_candidates[best_idx], lead_indices[best_idx]
+        else:
+            return np.array([]), None
+    
+    @staticmethod
+    def handle_failed_rpeaks(signals, rpeaks_list, detection_info, new_leads_to_try=[10, 11, 1], threshold=0.1, sampling_rate=100):
+        """Try to fix failed R-peaks by switching leads."""
+        n_single_replaced = 0
+        n_array_replaced = 0
+        single_replaced_signals = []
+        array_replaced_signals = []
+
+        # 1. Identify Signals with failed R-peaks
+        failed_indices = []
+        for idx, (signal, rpeaks, info) in enumerate(zip(signals, rpeaks_list, detection_info)):
+            if signal is None or len(rpeaks) == 0:
+                continue
+            leads_used = info.get('leads_for_rpeak_detection') or info.get('used_leads')
+            failed_mask = SingleBeatsDetector.identify_failed_rpeaks(signal, rpeaks, leads_used, threshold)
+            if np.any(failed_mask):
+                failed_indices.append(idx)
+
+        # 2. Loop through signals with failed R-peaks
+        for idx in tqdm(failed_indices, desc="Handling Signals with failed R-peaks", total=len(failed_indices)):
+            signal = signals[idx]
+            rpeaks = rpeaks_list[idx]
+            
+            # Collect R-Peak candidates from other leads
+            rpeaks_candidates = []
+            lead_indices = []
+            for lead in new_leads_to_try:
+                try:
+                    new_rpeaks = SingleBeatsDetector.detect_rpeaks(signal, lead, sampling_rate)
+                    rpeaks_candidates.append(new_rpeaks)
+                    lead_indices.append(lead)
+                except Exception:
+                    continue
+            
+            # Choose the best lead based on criteria
+            best_rpeaks, best_lead = SingleBeatsDetector.choose_best_rpeaks(signal, rpeaks_candidates, lead_indices, threshold)
+            if len(best_rpeaks) == 0:
+                continue
+
+            leads_used = detection_info[idx].get('leads_for_rpeak_detection') or detection_info[idx].get('used_leads')
+            if leads_used is None:
+                leads_used = [1]
+            elif isinstance(leads_used, int):
+                leads_used = [leads_used]
+            
+            if len(best_rpeaks) == len(rpeaks):
+                # Replace only failed R-peaks
+                rpeaks_fixed = np.array(rpeaks, copy=True)
+                failed_mask = SingleBeatsDetector.identify_failed_rpeaks(signal, rpeaks, leads_used, threshold)
+                n_replaced = np.sum(failed_mask) # count replaced rpeaks
+
+                if n_replaced > 0:
+                    rpeaks_fixed[failed_mask] = best_rpeaks[failed_mask] # Replace only failed
+                    rpeaks_list[idx] = rpeaks_fixed # Update in main list
+                    n_single_replaced += n_replaced # Update counters and logs
+                    single_replaced_signals.append((idx, n_replaced)) # Log the replacement
+            else:
+                # Replace the whole array
+                rpeaks_list[idx] = best_rpeaks
+                detection_info[idx]["ECG_R_Peaks"] = best_rpeaks
+                n_array_replaced += 1
+                array_replaced_signals.append(idx)
+            
+            # update detection_info
+            if best_lead is not None:
+                if "used_leads" in detection_info[idx]:
+                    if best_lead not in detection_info[idx]["used_leads"]:
+                        detection_info[idx]["used_leads"].append(best_lead)
+                else:
+                    detection_info[idx]["used_leads"] = [best_lead]
+        
+        print(20*'-')
+        print(f"Number of single replaced R-Peaks: {n_single_replaced}")
+        if single_replaced_signals:
+            print("Single replaced R-Peaks:")
+            # Gruppiere nach Anzahl der Ersetzungen
+            grouped = defaultdict(list)
+            for idx, n in single_replaced_signals:
+                grouped[n].append(idx)
+            for n in sorted(grouped):
+                print(f"({n}): ID examples: {grouped[n][:10]}")
+
+        print(20*'-')
+        print(f"Number of completely replaced R-Peak arrays: {n_array_replaced}")
+        if array_replaced_signals:
+            print(f"ID examples: {array_replaced_signals[:10]}")
+
+        return signals, rpeaks_list, detection_info
     
  
     # ------------------------ SEGMENTATION ------------------------
@@ -542,7 +720,81 @@ class SingleBeatsDetector:
         plt.tight_layout(rect=[0, 0.03, 1, 0.98])
         plt.show()
 
+
     # ------------------------ PLOTTING ------------------------
+    @staticmethod
+    def plot_one_signal_with_rpeaks(signal_id, cleaned_signals, rpeaks, detection_info, lead_names, label, figsize=(15, 20)):
+        """
+        Plottet ein einzelnes Signal mit allen 12 Ableitungen und R-Peaks.
+        
+        Args:
+            signal_id: Index des zu plottenden Signals
+            cleaned_signals: Liste aller bereinigten Signale
+            rpeaks: Liste aller R-Peak Arrays
+            lead_names: Namen der 12 Ableitungen
+            figsize: Größe der Figur
+        """
+        # Hole Signal und R-Peaks
+        cleaned_signal = cleaned_signals[signal_id]
+        rpeaks = rpeaks[signal_id]
+        
+        if cleaned_signal is None:
+            print(f"Signal {signal_id} ist None - Skip")
+            return
+        
+        # Konvertiere zu NumPy Array falls es eine Liste ist
+        if isinstance(cleaned_signal, list):
+            try:
+                cleaned_signal = np.array(cleaned_signal)
+            except Exception as e:
+                print(f"Error converting signal {signal_id} to array for plotting: {e}")
+                return
+        
+        # Prüfe ob Signal die richtige Form hat
+        if cleaned_signal.ndim != 2 or cleaned_signal.shape[1] != 12:
+            print(f"Signal {signal_id} has wrong shape for plotting: {cleaned_signal.shape}, expected (n_samples, 12)")
+            return
+    
+        # Get leads used for R-Peak Detection
+        leads_str = "?"
+        if detection_info is not None and detection_info[signal_id] is not None:
+            leads = detection_info[signal_id].get("leads_for_rpeak_detection")
+            if isinstance(leads, list):
+                leads_str = ", ".join([lead_names[l] for l in leads])
+            elif isinstance(leads, int):
+                leads_str = lead_names[leads]
+        
+        # Erstelle Figure mit 12 Subplots
+        fig, axes = plt.subplots(12, 1, figsize=figsize)
+        title = (
+            f'R-Peaks applied to all 12 ECG Leads\n'
+            f'Leads used for R-Peak Detection: {leads_str}\n'
+            f'Signal ID: {signal_id}, Label: {label}')
+        fig.suptitle(title, fontsize=14)
+        
+        # Plotte alle 12 Ableitungen
+        for lead_idx in range(12):
+            lead_data = cleaned_signal[:, lead_idx]
+            
+            # Plotte bereinigte Signale
+            axes[lead_idx].plot(lead_data, color='blue', alpha=0.7, linewidth=1)
+            
+            # Markiere R-Peaks
+            if len(rpeaks) > 0:
+                axes[lead_idx].scatter(rpeaks, lead_data[rpeaks], color='red', s=50, marker='o', zorder=5)
+            
+            # Titel und Labels
+            axes[lead_idx].set_title(f'Lead {lead_names[lead_idx]}')
+            axes[lead_idx].set_ylabel('Amplitude')
+            axes[lead_idx].grid(True, alpha=0.3)
+            
+            # X-Achse nur beim letzten Plot
+            if lead_idx == 11:
+                axes[lead_idx].set_xlabel('Samples')
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+        plt.show()
+
     @staticmethod
     def visualize_heartbeats_overlay(X_beats, y_beats, max_beats=20, figsize=(15, 10), window_config=[-0.2, 0.5]):
         """
