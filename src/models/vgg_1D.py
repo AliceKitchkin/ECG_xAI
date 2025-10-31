@@ -3,16 +3,16 @@ import torch
 import torch.nn as nn
 
 # ---------------------------- CLASS ----------------------------
-class VGG16_1D(nn.Module):
-	def __init__(self, in_channels=12, num_classes=2, input_length=70):
+class VGG_1D(nn.Module):
+	def __init__(self, in_channels=12, num_classes=2, input_length=77):
 		"""
-		1D VGG16 model adapted for time series data. Shape of input data should be (batch_size, in_channels, input_length). 
+		1D VGG model adapted for time series data. Shape of input data should be (batch_size, in_channels, input_length). 
 		Args:
 			in_channels (int): Number of input channels (e.g., 12 for 12-lead ECG).
 			num_classes (int): Number of output classes.
 			input_length (int): Length of the input time series.
 		"""
-		super(VGG16_1D, self).__init__()
+		super(VGG_1D, self).__init__()
 
 		self.features = nn.Sequential(
 			# Block 1												# → Input: [Batch, 12, 70]
@@ -42,9 +42,9 @@ class VGG16_1D(nn.Module):
 			nn.Conv1d(256, 256, kernel_size=3, padding=1), 			# Length 17 -> 17
 			nn.BatchNorm1d(256),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(256, 256, kernel_size=3, padding=1), 			# Length 17 -> 17
-			nn.BatchNorm1d(256),
-			nn.ReLU(inplace=True),
+			# nn.Conv1d(256, 256, kernel_size=1, padding=0), 			# Length 17 -> 17
+			# nn.BatchNorm1d(256),
+			# nn.ReLU(inplace=True),
 			nn.MaxPool1d(kernel_size=2, stride=2), 					# Length 17 -> 8
 																	# → Output: [Batch, 256, 8]
 
@@ -55,24 +55,24 @@ class VGG16_1D(nn.Module):
 			nn.Conv1d(512, 512, kernel_size=3, padding=1),			# Length 8 -> 8
 			nn.BatchNorm1d(512),
 			nn.ReLU(inplace=True),
-			nn.Conv1d(512, 512, kernel_size=3, padding=1), 			# Length 8 -> 8
-			nn.BatchNorm1d(512),
-			nn.ReLU(inplace=True),
+			# nn.Conv1d(512, 512, kernel_size=1, padding=0), 			# Length 8 -> 8
+			# nn.BatchNorm1d(512),
+			# nn.ReLU(inplace=True),
 			nn.MaxPool1d(kernel_size=2, stride=2), 					# Length 8 -> 4
 																	# → Output: [Batch, 512, 4]
 																	# → Flatten Size: 512*4 = 2048
 
 			# Block 5
-			# nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
+			nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
+			nn.BatchNorm1d(512),
+			nn.ReLU(inplace=True),
+			nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
+			nn.BatchNorm1d(512),
+			nn.ReLU(inplace=True),
+			# nn.Conv1d(512, 512, kernel_size=1, padding=0), 		# Length 4 -> 4
 			# nn.BatchNorm1d(512),
 			# nn.ReLU(inplace=True),
-			# nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
-			# nn.BatchNorm1d(512),
-			# nn.ReLU(inplace=True),
-			# nn.Conv1d(512, 512, kernel_size=3, padding=1), 		# Length 4 -> 4
-			# nn.BatchNorm1d(512),
-			# nn.ReLU(inplace=True),
-			# nn.MaxPool1d(kernel_size=2, stride=2), 				# Length 4 -> 2
+			nn.MaxPool1d(kernel_size=2, stride=2), 				# Length 4 -> 2
 			 														# → Output: [Batch, 512, 2]
 			 														# → Flatten Size: 512*2 = 1024
 		)

@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from collections import defaultdict
+import matplotlib.ticker as mticker
 
 
 class SingleBeatsDetector:
@@ -32,7 +33,7 @@ class SingleBeatsDetector:
     @staticmethod
     def process_single_signal(args, y_relabel, CLASS_NAMES):
         """
-        Einzelnes Signal verarbeiten - für Parallelisierung.
+        Einzelnes Signal verarbeiten
         """
         signal_idx, signal, sampling_rate, method, lead_for_rpeak_detection = args
         try:
@@ -60,7 +61,9 @@ class SingleBeatsDetector:
             return signal_idx, None, np.array([]), None
         
     @staticmethod
-    def clean_and_extract_rpeaks_sequential(ecg_signal, y_relabel, class_names, sampling_rate, method, leads_to_try_for_rpeaks=[10,11,1], handling=False):
+    def clean_and_extract_rpeaks_sequential(
+        ecg_signal, y_relabel, class_names, sampling_rate, method,
+        leads_to_try_for_rpeaks=None, ecg_ids=None, handling=False):
         """
         Cleaning and R-peak detection for ECG signals.
 
@@ -82,9 +85,10 @@ class SingleBeatsDetector:
         detection_info = []
 
         for signal_idx in tqdm(range(n_signals), desc="Processing ECG signals"):
-
             np.random.seed(42 + signal_idx)
             info = {}
+            ecg_id = ecg_ids[signal_idx] if (ecg_ids is not None and signal_idx < len(ecg_ids)) else signal_idx
+            info['ecg_id'] = ecg_id
             info["signal_idx"] = signal_idx
             info["label_idx"] = int(y_relabel[signal_idx])
             info["label_name"] = class_names[info["label_idx"]]
@@ -131,6 +135,8 @@ class SingleBeatsDetector:
                 all_rpeaks.append(np.array([]))
                 detection_info.append(None)
 
+
+
         return all_cleaned_signals, all_rpeaks, detection_info
 
     @staticmethod
@@ -147,14 +153,11 @@ class SingleBeatsDetector:
             sampling_rate: Sampling rate
             method: R-peak detection method
         """
-        # Erstelle Ausgabeordner
         os.makedirs(output_dir, exist_ok=True)
         
-        # 1. Alle cleaned signals in einer Datei speichern
-        # Konvertiere zu NumPy Array und handle None-Werte
+        # 1. build list of valid signals and their indices
         valid_signal_indices = []
         signals_list = []
-        
         for i, signal in enumerate(all_cleaned_signals):
             if signal is not None:
                 # Stelle sicher, dass es ein NumPy Array ist
@@ -163,35 +166,52 @@ class SingleBeatsDetector:
                 signals_list.append(signal)
                 valid_signal_indices.append(i)
         
+        # 2. Save all_cleaned_signals as single NumPy array (only valid signals)
         if signals_list:
-            # Speichere alle gültigen Signale als ein 3D Array mit Progress Bar
             with tqdm(total=1, desc="Saving all_cleaned_signals.npy") as pbar:
                 all_signals_array = np.stack(signals_list, axis=0)
                 np.save(os.path.join(output_dir, 'all_cleaned_signals.npy'), all_signals_array)
                 pbar.update(1)
         
-        # 2. R-Peaks: Direkt als Pickle speichern (verschiedene Längen)
+        # 3. Save all_rpeaks as Pickle
         with tqdm(total=1, desc="Saving rpeaks.pkl") as pbar:
             with open(os.path.join(output_dir, 'rpeaks.pkl'), 'wb') as f:
                 pickle.dump(all_rpeaks, f)
             pbar.update(1)
         
-        # 3. Detection Info als Pickle speichern
+        # 4. Save detection_info as Pickle
         with tqdm(total=1, desc="Saving detection_info.pkl") as pbar:
             with open(os.path.join(output_dir, 'detection_info.pkl'), 'wb') as f:
                 pickle.dump(detection_info, f)
             pbar.update(1)
-        
-        # 4. Erweiterte Metadata speichern
+
+        # 5. Extract ecg_ids from detection_info (preserve alignment with original list indices)
+        ecg_ids = []
+        for info in detection_info:
+            if isinstance(info, dict):
+                ecg_ids.append(info.get('ecg_id'))
+            else:
+                ecg_ids.append(None)
+
+        # 6. build metadata including ecg_ids for robust mapping on load
+        n_signals = len(all_cleaned_signals)
+        n_signals_with_rpeaks = sum(
+            (signal is not None) and (rpeaks is not None) and hasattr(rpeaks, '__len__') and (len(rpeaks) > 0)
+            for signal, rpeaks in zip(all_cleaned_signals, all_rpeaks)
+        )
+
         metadata = {
             'sampling_rate': sampling_rate,
             'method': method,
-            'n_signals': len(all_cleaned_signals),
+            'n_signals': n_signals,
             'valid_signal_indices': valid_signal_indices,
             'n_valid_signals': len(valid_signal_indices),
-            'total_rpeaks': sum(len(rpeaks) if rpeaks is not None else 0 for rpeaks in all_rpeaks),
+            'n_signals_with_rpeaks': n_signals_with_rpeaks,
+            'valid_rpeaks': sum(len(rpeaks) for rpeaks in all_rpeaks if rpeaks is not None),
             'signal_shape': all_signals_array.shape if signals_list else None,
-            'storage_method': 'single_file'  # Für Kompatibilität
+            'storage_method': 'single_file',
+            'ecg_ids': ecg_ids,
+            'valid_signal_ecg_ids': [ecg_ids[i] for i in valid_signal_indices]
         }
         
         with tqdm(total=1, desc="Saving metadata.pkl") as pbar:
@@ -201,8 +221,8 @@ class SingleBeatsDetector:
         
         print(f"R-Peak results saved to: {output_dir}")
         print(f"   - {metadata['n_signals']} total signals")
-        print(f"   - {metadata['n_valid_signals']} valid signals")
-        print(f"   - {metadata['total_rpeaks']} total R-peaks")
+        print(f"   - {metadata['n_valid_signals']} valid signals (not None)")
+        print(f"   - {metadata['valid_rpeaks']} valid R-peaks (not None)")
         print(f"   - Signal array shape: {metadata['signal_shape']}")
 
     @staticmethod
@@ -213,37 +233,35 @@ class SingleBeatsDetector:
         Returns:
             tuple: (all_cleaned_signals, all_rpeaks, detection_info, metadata)
         """
-        # 1. Lade Metadata mit Progress Bar
+        # 1. Load Metadata
         with tqdm(total=1, desc="Loading metadata.pkl") as pbar:
             with open(os.path.join(input_dir, 'metadata.pkl'), 'rb') as f:
                 metadata = pickle.load(f)
             pbar.update(1)
         
-        # Prüfe welche Speichermethode verwendet wurde
+        # 2. Checke Storage Method
         storage_method = metadata.get('storage_method', 'individual_files')
         
         if storage_method == 'single_file' or os.path.exists(os.path.join(input_dir, 'all_cleaned_signals.npy')):
-            all_signals_array = np.load(os.path.join(input_dir, 'all_cleaned_signals.npy')) # Eine große Datei
+            all_signals_array = np.load(os.path.join(input_dir, 'all_cleaned_signals.npy'))
             
-            # Rekonstruiere die ursprüngliche Liste-Struktur
+            # reconstruct original list shape
             all_cleaned_signals = [None] * metadata['n_signals']
-            
             with tqdm(total=len(metadata['valid_signal_indices']), desc="Reconstructing signal list") as pbar:
                 for idx, signal_idx in enumerate(metadata['valid_signal_indices']):
                     all_cleaned_signals[signal_idx] = all_signals_array[idx]
                     pbar.update(1)
-                
         else:
             print(f"Unsupported storage method")
             return None, None, None, None
         
-        # 2. Lade R-Peaks mit Progress Bar
+        # 3. Load R-Peaks
         with tqdm(total=1, desc="Loading rpeaks.pkl") as pbar:
             with open(os.path.join(input_dir, 'rpeaks.pkl'), 'rb') as f:
                 all_rpeaks = pickle.load(f)
             pbar.update(1)
         
-        # 3. Lade Detection Info mit Progress Bar
+        # 4. Load Detection Info
         with tqdm(total=1, desc="Loading detection_info.pkl") as pbar:
             with open(os.path.join(input_dir, 'detection_info.pkl'), 'rb') as f:
                 detection_info = pickle.load(f)
@@ -251,9 +269,9 @@ class SingleBeatsDetector:
         
         print(f"R-Peak results loaded from: {input_dir}")
         print(f"   - {metadata['n_signals']} total signals")
-        print(f"   - {metadata['n_valid_signals']} valid signals")
-        print(f"   - {metadata['total_rpeaks']} total R-peaks")
-        print(f"   - Storage method: {storage_method}")
+        print(f"   - {metadata['n_valid_signals']} valid signals (not None)")
+        print(f"   - {metadata['valid_rpeaks']} valid R-peaks (not None)")
+        print(f"   - Signal array shape: {metadata['signal_shape']}")
         
         return all_cleaned_signals, all_rpeaks, detection_info, metadata
 
@@ -272,14 +290,23 @@ class SingleBeatsDetector:
         n_failed_total = 0
         n_failed_norm_total = 0
         n_failed_mi_total = 0
+
+        def _orig_id(info, idx):
+            if info is None:
+                return idx
+            try:
+                return info.get("signal_idx", idx)
+            except Exception:
+                return idx
         
         # Loop through signals and rpeaks
         for idx, (signal, rpeaks_arr, info) in enumerate(zip(signals, rpeaks, detection_info)):
+            orig_id = _orig_id(info, idx)
             if signal is None:
-                signalids_none.append(idx)
+                signalids_none.append(orig_id)
                 continue
             if rpeaks_arr is None or not hasattr(rpeaks_arr, '__len__') or len(rpeaks_arr) == 0:
-                rpeaks_none.append(idx)
+                rpeaks_none.append(orig_id)
                 continue
 
             # determine which lead was used for R-Peak Detection
@@ -297,14 +324,14 @@ class SingleBeatsDetector:
             n_failed_total += n_failed
             
             if n_failed > 0:
-                failed_rpeaks.append(idx)
+                failed_rpeaks.append(orig_id)
                 if info is not None:
                     label = info.get('label_name', 'UNKOWN')
                     if label == 'NORM':
-                        failed_norm.append(idx)
+                        failed_norm.append(orig_id)
                         n_failed_norm_total += n_failed
                     elif label == 'MI':
-                        failed_mi.append(idx)
+                        failed_mi.append(orig_id)
                         n_failed_mi_total += n_failed
 
         # Calculate statistics
@@ -342,12 +369,13 @@ class SingleBeatsDetector:
         print(f"\t> In MI:: {n_failed_mi_total} ({mi_failed_perc:.2f}%)")
         print(f"\t> ID Examples: {failed_mi[:samples]}")
 
+
     @staticmethod
     def detect_rpeaks(signal, lead_idx, sampling_rate=100, method="neurokit"):
         """Detect R-peaks on a specific lead."""
         lead = signal[:, lead_idx]
-        _, rpeak_info = nk.ecg_process(lead, sampling_rate=sampling_rate, method=method)
-        return rpeak_info["ECG_R_Peaks"]
+        _, detection_info = nk.ecg_process(lead, sampling_rate=sampling_rate, method=method)
+        return detection_info
     
     @staticmethod
     def identify_failed_rpeaks(signals, rpeaks_list, leads_used_list, mad_thresh=4.0):
@@ -410,12 +438,50 @@ class SingleBeatsDetector:
             return np.array([]), None
     
     @staticmethod
-    def handle_failed_rpeaks(signals, rpeaks_list, detection_info, new_leads_to_try=[10, 11, 1], mad_thresh=4.0, sampling_rate=100):
-        """Try to fix failed R-peaks by switching leads."""
+    def handle_failed_rpeaks(
+        signals, rpeaks_list, detection_info, new_leads_to_try=[10, 11, 1],
+        mad_thresh=11, sampling_rate=100, ecg_ids=None):
+        """
+        Fixes failed R-peaks by trying alternative leads and replacing only failed peaks or the whole array.
+        Args:
+            signals: List of ECG signals (NumPy Arrays)
+            rpeaks_list: List of R-peak arrays  
+            detection_info: List of detection info dictionaries
+            new_leads_to_try: List of lead indices to try for R-peak detection
+            mad_thresh: Threshold for outlier detection
+            sampling_rate: Sampling rate of ECG signals
+            ecg_ids: Optional list of ECG IDs for robust mapping
+        Returns:
+            Updated rpeaks_list and detection_info with fixed R-peaks
+        """
         n_single_replaced = 0
         n_array_replaced = 0
         single_replaced_signals = []
         array_replaced_signals = []
+        fields_to_update = ["ECG_Raw", "ECG_Clean", "ECG_R_Peaks", "ECG_Rate", "ECG_P_Peaks", "ECG_Q_Peaks", "ECG_S_Peaks",
+                            "ECG_T_Peaks", "ECG_P_Onsets", "ECG_P_Offsets", "ECG_T_Onsets", "ECG_T_Offsets",
+                            "ECG_R_Onsets", "ECG_R_Offsets", "ECG_Phase_Atrial", "ECG_Phase_Ventricular",
+                            "ECG_Atrial_PhaseCompletion", "ECG_Ventricular_PhaseCompletion", "ECG_Peaks"]
+        
+        # 0. Ensure each detection_info entry contains persistent original ecg_id
+        if ecg_ids is not None:
+            for i in range(len(detection_info)):
+                info = detection_info[i]
+                if info is None:
+                    # create minimal dict to hold ecg_id (keeps shape consistent)
+                    detection_info[i] = {"ecg_id": ecg_ids[i] if i < len(ecg_ids) else None}
+                else:
+                    # only set if missing
+                    if "ecg_id" not in info or info.get("ecg_id") is None:
+                        info["ecg_id"] = ecg_ids[i] if i < len(ecg_ids) else None
+        else:
+            # ensure key exists (may remain None) for downstream code that expects a dict
+            for i in range(len(detection_info)):
+                info = detection_info[i]
+                if info is None:
+                    detection_info[i] = {"ecg_id": None}
+                else:
+                    info.setdefault("ecg_id", None)
 
         # 1. Identify Signals with failed R-peaks
         leads_used_list = []
@@ -438,7 +504,8 @@ class SingleBeatsDetector:
             lead_indices = []
             for lead in new_leads_to_try:
                 try:
-                    new_rpeaks = SingleBeatsDetector.detect_rpeaks(signal, lead, sampling_rate)
+                    new_detection_info = SingleBeatsDetector.detect_rpeaks(signal, lead, sampling_rate)
+                    new_rpeaks = new_detection_info["ECG_R_Peaks"]
                     rpeaks_candidates.append(new_rpeaks)
                     lead_indices.append(lead)
                 except Exception:
@@ -466,9 +533,25 @@ class SingleBeatsDetector:
                     rpeaks_list[idx] = rpeaks_fixed # Update in main list
                     n_single_replaced += n_replaced # Update counters and logs
                     single_replaced_signals.append((idx, n_replaced)) # Log the replacement
+
+                    # --- Update detection_info fields for replaced indices ---
+                    try:
+                        new_detection_info = SingleBeatsDetector.detect_rpeaks(signal, best_lead, sampling_rate)
+                        for key in fields_to_update:
+                            if key in new_detection_info:
+                                detection_info[idx][key] = new_detection_info[key]
+                    except Exception as e:
+                        print(f"Warning: Could not update detection_info for signal {idx}: {e}")
             else:
                 # Replace the whole array
                 rpeaks_list[idx] = best_rpeaks
+                try:
+                    new_detection_info = SingleBeatsDetector.detect_rpeaks(signal, best_lead, sampling_rate)
+                    for key in fields_to_update:
+                        if key in new_detection_info:
+                            detection_info[idx][key] = new_detection_info[key]
+                except Exception as e:
+                    print(f"Warning: Could not update detection_info for signal {idx}: {e}")
                 detection_info[idx]["ECG_R_Peaks"] = best_rpeaks
                 n_array_replaced += 1
                 array_replaced_signals.append(idx)
@@ -565,15 +648,19 @@ class SingleBeatsDetector:
                 all_segmented_beats[signal_idx] = None
 
         valid_signals = sum(1 for beats in all_segmented_beats if beats is not None)
-        total_beats = 0
+        valid_beats = 0
+        n_beats = 0
         for signal_beats in all_segmented_beats:
+            n_beats += len(signal_beats[0])
             if signal_beats is not None and 0 in signal_beats:
-                total_beats += len(signal_beats[0])
+                valid_beats += len(signal_beats[0])
 
         print(f"Segmentierung abgeschlossen!")
-        print(f"   - Verarbeitete Signale: {n_signals}")
-        print(f"   - Gültige Signale: {valid_signals}")
-        print(f"   - Gesamtanzahl Beats: {total_beats}")
+        print(f"   - {n_signals} total signals")
+        print(f"   - {valid_signals} valid signals (not None)")
+
+        print(f"   - {n_beats} total beats")
+        print(f"   - {valid_beats} valid beats (not None)")
 
         return all_segmented_beats
 
@@ -660,9 +747,10 @@ class SingleBeatsDetector:
 
     # PLOTTING
     @staticmethod
-    def plot_beat_segments(all_segmented_beats, signal_idx=0, label='UNKOWN',
-                           max_beats_per_lead=15, lead_names=None,
-                           sampling_frequency=100, fig_size=(12, 16)):
+    def plot_beat_segments(all_segmented_beats, signal_idx=0,
+                        detection_info=None, epochs_start=-0.2, epochs_end=0.5,
+                        rpeak_marker=0, max_beats_per_lead=15, lead_names=None,
+                        sampling_frequency=100, fig_size=(12, 16)):
         """
         Visualisiert die segmentierten Beats für alle 12 Ableitungen eines EKG-Signals.
 
@@ -678,10 +766,23 @@ class SingleBeatsDetector:
             return
         
         signal_beats = all_segmented_beats[signal_idx]
+
+        # use col "signal_id" in detection info, not index in list
+        signal_id = detection_info[signal_idx].get("signal_id", signal_idx)
+        label = detection_info[signal_idx]["label_name"]
+        
+        # could be more then one lead
+        # lead names comma separated string
+        lead_used_for_rpeaks = detection_info[signal_idx].get("leads_for_rpeak_detection", "Unknown")
+        lead_used_for_rpeaks_str = ", ".join([lead_names[i] for i in lead_used_for_rpeaks]) if isinstance(lead_used_for_rpeaks, list) else str(lead_used_for_rpeaks)
         
         # Erstelle Figure mit 12 Subplots
         fig, axes = plt.subplots(12, 1, figsize=fig_size)
-        fig.suptitle(f'R-Peaks from Lead II applied to all 12 ECG Leads (Signal ID: {signal_idx}, Label: {label})', fontsize=14)
+        title = (
+            f'R-Peaks applied to all 12 ECG Leads\n'
+            f'Leads used for R-Peak Detection: {lead_used_for_rpeaks_str}\n'
+            f'Signal ID: {signal_idx}, Label: {label}')
+        fig.suptitle(title, fontsize=14)
 
         # Plotte für jede Ableitung (Lead)
         for lead_idx in range(12):
@@ -700,19 +801,20 @@ class SingleBeatsDetector:
             # Plotte alle Beats dieser Ableitung übereinander
             for beat_key in list(epochs.keys())[:max_beats_per_lead]:
                 beat_data = epochs[beat_key].iloc[:, 0]  # Erste Spalte der Beat-Daten
-                time_axis = np.arange(len(beat_data)) / sampling_frequency - 0.2  # Zeit relativ zu R-Peak
+                time_axis = np.arange(len(beat_data)) / sampling_frequency - abs(epochs_start)  # Zeit relativ zu R-Peak
 
                 axes[lead_idx].plot(time_axis, beat_data, alpha=0.6, linewidth=1, color='blue')
                 beat_count += 1
             
-            # R-Peak bei t=0 markieren
-            axes[lead_idx].axvline(x=0, color='red', linestyle='--', alpha=0.8, linewidth=2, label='R-peak')
+            # mark rpeak
+            axes[lead_idx].axvline(x=rpeak_marker, color='red', linestyle='--', alpha=0.8, linewidth=2, label='R-peak')
 
             # Achsenbeschriftung und Titel
-            axes[lead_idx].set_title(f'Lead {lead_names[lead_idx]} - {beat_count} Segmented Beats')
-            axes[lead_idx].set_ylabel('Amplitude')
+            #axes[lead_idx].set_title(f'Lead {lead_names[lead_idx]} - {beat_count} Segmented Beats')
+            axes[lead_idx].set_ylabel(f'{lead_names[lead_idx]}')
             axes[lead_idx].grid(True, alpha=0.3)
-            axes[lead_idx].set_xlim(-0.2, 0.5)  # Zeitfenster von -0.2s bis +0.5s
+            axes[lead_idx].yaxis.set_major_formatter(mticker.FormatStrFormatter('%.1f'))
+            #axes[lead_idx].set_xlim(epochs_start, epochs_end)
             
             # Nur bei der letzten Ableitung x-Achsen Label
             if lead_idx == 11:
@@ -786,10 +888,9 @@ class SingleBeatsDetector:
                 axes[lead_idx].scatter(rpeaks, lead_data[rpeaks], color='red', s=50, marker='o', zorder=5)
             
             # Titel und Labels
-            axes[lead_idx].set_title(f'Lead {lead_names[lead_idx]}')
-            axes[lead_idx].set_ylabel('Amplitude')
+            axes[lead_idx].set_ylabel(lead_names[lead_idx])
             axes[lead_idx].grid(True, alpha=0.3)
-            
+                    
             # X-Achse nur beim letzten Plot
             if lead_idx == 11:
                 axes[lead_idx].set_xlabel('Samples')

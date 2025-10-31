@@ -51,10 +51,19 @@ class TensorPreprocessor:
 		"""
 		Prüft und gibt die Shapes und Typen der Tensoren aus. Optional: Erwartete Channels/Length prüfen.
 		"""
-		print(f"Final shapes - X: {tuple(X_tensor.shape)}")
+		print("--- Tensor Shape Check ---")
 		print(f"X_tensor: shape={tuple(X_tensor.shape)}, dtype={X_tensor.dtype}")
 		if y_tensor is not None:
-			print(f"Final shapes - y: {tuple(y_tensor.shape)}")
+			print(f"y_tensor: shape={tuple(y_tensor.shape)}, dtype={y_tensor.dtype}")
+		warn = False
+		if expected_channels is not None and X_tensor.shape[1] != expected_channels:
+			print(f"Warnung: Channels (X_tensor.shape[1]={X_tensor.shape[1]}) stimmt nicht mit expected_channels={expected_channels} überein!")
+			warn = True
+		if expected_length is not None and X_tensor.shape[2] != expected_length:
+			print(f"Warnung: Length (X_tensor.shape[2]={X_tensor.shape[2]}) stimmt nicht mit expected_length={expected_length} überein!")
+			warn = True
+		if not warn:
+			print("Alles korrekt: Tensor-Formate stimmen überein.")
 		print("--------------------------")
 
 
@@ -63,8 +72,23 @@ class TensorPreprocessor:
 		Prüft die Shapes und permutiert X_tensor automatisch, falls Channels/Length vertauscht sind.
 		Gibt die finale Shape-Info aus und gibt den ggf. korrigierten Tensor zurück.
 		"""
-		if expected_channels is not None and expected_length is not None and X_tensor.ndim == 3:
-			if X_tensor.shape[1] == expected_length and X_tensor.shape[2] == expected_channels:
-				X_tensor = X_tensor.permute(0, 2, 1)
+		print("[Auto-Fix] Initiale Prüfung:")
+		warn = False
+		if expected_channels is not None and X_tensor.shape[1] != expected_channels:
+			warn = True
+		if expected_length is not None and X_tensor.shape[2] != expected_length:
+			warn = True
+		self.check_shapes(X_tensor, y_tensor, expected_channels, expected_length)
+		if warn:
+			print("[Auto-Fix] Versuche Shape automatisch zu korrigieren...")
+			# Permutiere, falls Channels/Length vertauscht
+			if expected_channels is not None and expected_length is not None and X_tensor.ndim == 3:
+				if X_tensor.shape[1] == expected_length and X_tensor.shape[2] == expected_channels:
+					print(f"Shape-Fix: Permutiere von (Batch, Length, Channels) zu (Batch, Channels, Length)")
+					X_tensor = X_tensor.permute(0, 2, 1)
+				elif X_tensor.shape[1] == expected_channels and X_tensor.shape[2] == expected_length:
+					print("Shape-Fix: Keine Änderung nötig, Format stimmt bereits.")
+				else:
+					print("Shape-Fix: Achtung, unerwartete Dimensionen! Bitte manuell prüfen.")
 			self.check_shapes(X_tensor, y_tensor, expected_channels, expected_length)
 		return X_tensor
