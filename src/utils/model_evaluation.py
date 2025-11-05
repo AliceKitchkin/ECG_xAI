@@ -50,104 +50,51 @@ class ModelEvaluation:
     
 
     @staticmethod
-    def plot_loss_curves(train_losses=None, val_losses=None, test_losses=None,
-                         train_losses_per_class=None, val_losses_per_class=None, test_losses_per_class=None,
-                         class_names=None, figsize=(10, 6), history_path=None, show_per_class=True):
+    def plot_loss_curves(figsize=None, history_path=None, show_per_class=True,
+                        show_datasets=['train', 'val', 'test']):
         """
         Plottet Loss-Kurven für Gesamt- und pro-Klasse-Loss für Train, Val und Test.
         """
+        if not os.path.exists(history_path):
+            raise FileNotFoundError(f"History file not found: {history_path}")
+
+        history = pd.read_csv(history_path)
+        epochs = history['epoch'] if 'epoch' in history.columns else np.arange(len(history))
+
         plt.figure(figsize=figsize)
 
-        if history_path is not None:
-            if not os.path.exists(history_path):
-                raise FileNotFoundError(f"History file not found: {history_path}")
-            history = pd.read_csv(history_path)
-            epochs = history['epoch'] if 'epoch' in history.columns else np.arange(len(history))
+        # Plot overall losses basierend auf show_datasets Parameter
+        if 'train' in show_datasets and 'train_loss' in history.columns:
+            plt.plot(epochs, history['train_loss'], label='Train Loss', color='orange', linewidth=2)
+        if 'val' in show_datasets and 'val_loss' in history.columns:
+            plt.plot(epochs, history['val_loss'], label='Val Loss', color='lightblue', linewidth=2)
+        if 'test' in show_datasets and 'test_loss' in history.columns:
+            plt.plot(epochs, history['test_loss'], label='Test Loss', color='green', linewidth=2)
 
-            # Plot overall losses
-            if 'train_loss' in history.columns:
-                plt.plot(epochs, history['train_loss'], label='Train Loss', color='orange', linewidth=2)
-            if 'val_loss' in history.columns:
-                plt.plot(epochs, history['val_loss'], label='Val Loss', color='lightblue', linewidth=2)
-            if 'test_loss' in history.columns:
-                plt.plot(epochs, history['test_loss'], label='Test Loss', color='green', linewidth=2)
-
-            # Plot per-class losses if present and enabled
-            if show_per_class:
-                for col in history.columns:
-                    if col.startswith('train_loss_'):
-                        plt.plot(epochs, history[col], '--', label=col)
-                    if col.startswith('val_loss_'):
-                        plt.plot(epochs, history[col], ':', label=col)
-                    if col.startswith('test_loss_'):
-                        plt.plot(epochs, history[col], '-.', label=col)
-
-            plt.xlabel('Epoch')
-            plt.ylabel('Loss / Score')
-            plt.title('Training History')
-            plt.legend()
-            plt.grid(True, alpha=0.5, linewidth=0.7)
-            plt.xticks(np.arange(0, epochs.max() + 1, 1))
-            plt.tight_layout()
-            plt.show()
-            return
-
-        # Plot overall losses
-        if train_losses is not None:
-            plt.plot(train_losses, label='Train Loss', color='orange', linewidth=2)
-        if val_losses is not None:
-            plt.plot(val_losses, label='Val Loss', color='blue', linewidth=2)
-        if test_losses is not None:
-            plt.plot(test_losses, label='Test Loss', color='green', linewidth=2)
-
-        # Plot per-class losses only if enabled
+        # Plot per-class losses if present and enabled
         if show_per_class:
-            n_classes = 0
-            for losses_per_class in [train_losses_per_class, val_losses_per_class, test_losses_per_class]:
-                if losses_per_class is not None:
-                    n_classes = len(losses_per_class[0])
-                    break
+            for col in history.columns:
+                if 'train' in show_datasets and col.startswith('train_loss_'):
+                    plt.plot(epochs, history[col], '--', label=col)
+                if 'val' in show_datasets and col.startswith('val_loss_'):
+                    plt.plot(epochs, history[col], ':', label=col)
+                if 'test' in show_datasets and col.startswith('test_loss_'):
+                    plt.plot(epochs, history[col], '-.', label=col)
 
-            if n_classes > 0:
-                names = class_names if class_names and len(class_names) == n_classes else [f"Class {i}" for i in range(n_classes)]
-                colors = plt.cm.tab10.colors
-
-                if train_losses_per_class is not None:
-                    train_losses_per_class = np.array(train_losses_per_class)
-                    for i in range(n_classes):
-                        plt.plot(train_losses_per_class[:, i], ':', color=colors[i % len(colors)], label=f'Train {names[i]}', linewidth=1, alpha=0.7)
-
-                if val_losses_per_class is not None:
-                    val_losses_per_class = np.array(val_losses_per_class)
-                    for i in range(n_classes):
-                        plt.plot(val_losses_per_class[:, i], ':', color=colors[i % len(colors)], label=f'Val {names[i]}', linewidth=1, alpha=0.7)
-
-                if test_losses_per_class is not None:
-                    test_losses_per_class = np.array(test_losses_per_class)
-                    for i in range(n_classes):
-                        plt.plot(test_losses_per_class[:, i], ':', color=colors[i % len(colors)], label=f'Test {names[i]}', linewidth=1, alpha=0.7)
-
-        if train_losses is not None:
-            n_epochs = len(train_losses)
-        elif val_losses is not None:
-            n_epochs = len(val_losses)
-        elif test_losses is not None:
-            n_epochs = len(test_losses)
-        else:
-            n_epochs = 0
-
-        plt.xlabel('Epoch')
+        plt.xlabel('Epoche')
         plt.ylabel('Loss / Score')
-        plt.title('Training/Validation/Test Loss History')
+        plt.title('Training History')
         plt.legend()
-        plt.grid(True, alpha=0.5, linewidth=0.7)
-        plt.xticks(np.arange(0, n_epochs, 1))
+        plt.grid(True, alpha=0.3, linewidth=0.7)
+        plt.xlim(epochs.min(), epochs.max())
+        plt.xticks(np.arange(0, epochs.max() + 1, 2))
+        plt.ylim(0, 1.2)
         plt.tight_layout()
         plt.show()
 
 
     @staticmethod
-    def plot_metrics_from_history(history_path, metrics=None, figsize=(10, 6)):
+    def plot_metrics_from_history(history_path, metrics=None, figsize=None):
         """
         Plottet beliebige Metriken aus einer Trainings-History-CSV.
         """
@@ -167,30 +114,29 @@ class ModelEvaluation:
             else:
                 print(f"Warnung: '{metric}' nicht in History gefunden.")
 
-        plt.xlabel('Epoch')
+        plt.xlabel('Epochen')
         plt.ylabel('Score')
-        plt.title('Metrics')
+        plt.title('Metriken')
         plt.legend()
-        plt.grid(True, alpha=0.5, linewidth=0.7)
-        plt.ylim(0, 1)
-        plt.xticks(np.arange(0, epochs.max() + 1, 1))
+        plt.grid(True, alpha=0.3, linewidth=0.7)
+        plt.xlim(epochs.min(), epochs.max())
+        plt.xticks(np.arange(0, epochs.max() + 1, 2))
+        plt.ylim(0, 1.1)
         plt.tight_layout()
         plt.show()
     
 
     @staticmethod
-    def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=(7,6), dataset='val'):
+    def plot_confusion_matrix(y_true, y_pred, class_names=None, normalize=False, figsize=None, dataset='val'):
         """
         Plottet die Konfusionsmatrix.
         """
         cm = confusion_matrix(y_true, y_pred, normalize='true' if normalize else None)
         plt.figure(figsize=figsize)
         im = plt.imshow(cm, cmap='Blues')
-
         tick_marks = np.arange(len(class_names)) if class_names else np.arange(cm.shape[0])
-        plt.xticks(tick_marks, class_names if class_names else tick_marks, rotation=45)
+        plt.xticks(tick_marks, class_names if class_names else tick_marks)
         plt.yticks(tick_marks, class_names if class_names else tick_marks)
-        
         plt.colorbar(im, fraction=0.046, pad=0.04)
         
         fmt = '.2f' if normalize else 'd'
@@ -198,25 +144,23 @@ class ModelEvaluation:
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 plt.text(j, i, format(cm[i, j], fmt),
-                         ha="center", va="center",
-                         color="white" if cm[i, j] > thresh else "black")
-                
+                        ha="center", va="center",
+                        color="white" if cm[i, j] > thresh else "black")
         if dataset == "train":
             set = "Training"
         elif dataset == "val":
             set = "Validation"
         else:
             set = "Test"
-                
         plt.title(f'Confusion Matrix on {set} Dataset')
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
+        plt.xlabel('Vorhersage')
+        plt.ylabel('Wahrheit')
         plt.tight_layout()
         plt.show()
 
 
     @staticmethod
-    def plot_learning_rate(history_path, figsize=(12, 4)):
+    def plot_learning_rate(history_path, figsize=None):
         """
         Plottet den Verlauf der Lernrate aus der Trainings-History.
         """
@@ -226,68 +170,80 @@ class ModelEvaluation:
             raise ValueError("Die Spalte 'learning_rate' wurde in der History nicht gefunden.")
 
         plt.figure(figsize=figsize)
-        plt.plot(history['learning_rate'])
-        plt.xlabel('Epoch')
-        plt.ylabel('Learning Rate')
-        plt.title('Learning Rate Verlauf')
+        plt.plot(history['epoch'], history['learning_rate'], color="#4D8446", linewidth=2)
+        plt.xlabel('Epoche')
+        plt.ylabel('Lernrate')
+        plt.title('Lernratenverlauf')
+        plt.grid(True, alpha=0.3, linewidth=0.7)
+        plt.xlim(history['epoch'].min(), history['epoch'].max())
+        plt.xticks(np.arange(0, history['epoch'].max()+1, 2))
+        plt.tight_layout()
         plt.show()
 
     
     @staticmethod
-    def plot_roc(y_true_test, y_probs_test, dataset, figsize=(6, 5)):
+    def plot_roc(y_true_test, y_probs_test, dataset, figsize=None):
         """
-        Plottet die ROC-Kurve für beide Klassen.
+        Plottet die ROC-AUC.
         """
-        # ROC für MI (Klasse 0)
-        fpr_mi, tpr_mi, _ = roc_curve(y_true_test, y_probs_test[:, 0], pos_label=0)
-        auc_mi = auc(fpr_mi, tpr_mi)
-
-        # ROC für NORM (Klasse 1)
-        fpr_norm, tpr_norm, _ = roc_curve(y_true_test, y_probs_test[:, 1], pos_label=1)
-        auc_norm = auc(fpr_norm, tpr_norm)
+        # ROC-Kurve für die positive Klasse (NORM = 1)
+        fpr, tpr, _ = roc_curve(y_true_test, y_probs_test[:, 1])
+        roc_auc = auc(fpr, tpr)
 
         plt.figure(figsize=figsize)
-        plt.plot(fpr_mi, tpr_mi, color='darkred', lw=2, label=f'MI (AUC = {auc_mi:.2f})')
-        plt.plot(fpr_norm, tpr_norm, color='green', lw=2, label=f'NORM (AUC = {auc_norm:.2f})')
-        plt.plot([0, 1], [0, 1], color='grey', lw=1, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
+        plt.plot(fpr, tpr, color='grey', lw=1.5, label=f'ROC Curve (AUC = {roc_auc:.2f})')
+        plt.fill_between(fpr, tpr, alpha=0.2, color='grey')
+        plt.plot([0, 1], [0, 1], color='grey', lw=1, linestyle='--', label='Zufälliger Klassifikator')
+        plt.xlim([0, 1])
+        plt.ylim([0, 1])
         plt.xlabel('False Positive Rate')
         plt.ylabel('True Positive Rate')
-        plt.title(f'ROC Curve für MI und NORM ({dataset})')
+        plt.title(f'ROC Curve ({dataset})')
         plt.legend(loc="lower right")
+        plt.grid(True, alpha=0.3, linewidth=0.7)
+        plt.tight_layout()
         plt.show()
 
 
     @staticmethod
-    def plot_precision_recall_curve(y_true, y_probs, dataset, figsize=(6, 5)):
+    def plot_precision_recall_curve(y_true, y_probs, dataset, figsize=None):
         """
         Plottet die Precision-Recall-Kurve für beide Klassen.
         """
         plt.figure(figsize=figsize)
-
-        # MI (Klasse 0)
-        disp_mi = PrecisionRecallDisplay.from_predictions(
+        disp_mi = PrecisionRecallDisplay.from_predictions(      # MI (Klasse 0)
             y_true == 0,
             y_probs[:, 0],
             name="MI",
             color="darkred",
-            plot_chance_level=True,
+            plot_chance_level=False,
             despine=True,
             ax=plt.gca()
         )
-
-        # NORM (Klasse 1)
-        disp_norm = PrecisionRecallDisplay.from_predictions(
+        disp_norm = PrecisionRecallDisplay.from_predictions(    # NORM (Klasse 1)
             y_true == 1,
             y_probs[:, 1],
             name="NORM",
             color="green",
-            plot_chance_level=True,
+            plot_chance_level=False,
             despine=True,
             ax=plt.gca()
         )
 
+        # Manuell Chance Level Linien hinzufügen
+        mi_prevalence = np.sum(y_true == 0) / len(y_true)
+        norm_prevalence = np.sum(y_true == 1) / len(y_true)
+        
+        plt.axhline(y=mi_prevalence, color='grey', linestyle='--', linewidth=1, 
+                    alpha=0.7, label=f'Zufallsrate MI ({mi_prevalence:.2f})')
+        plt.axhline(y=norm_prevalence, color='grey', linestyle='--', linewidth=1, 
+                    alpha=0.7, label=f'Zufallsrate NORM ({norm_prevalence:.2f})')
+
+        plt.tight_layout()
+        plt.grid(True, alpha=0.3, linewidth=0.7)
+        plt.legend(loc="lower right")
+        plt.xlabel('Recall (Sensitivität)')
+        plt.ylabel('Precision (Spezifität)')
         plt.title(f"Precision-Recall Curve für MI und NORM ({dataset})")
         plt.show()
 
